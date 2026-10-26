@@ -2,95 +2,100 @@
 
 ## 1. Architectural Philosophy: Organisation-First & Denial-by-Default
 
-ArchScale V05 repudiates user-centric authentication patterns. In conventional systems, a user record possesses permissions, global roles, or direct tenant associations. ArchScale V05 operates under strict invariants:
+ArchScale V05 establishes an organisation-first, data-driven security perimeter. The core architectural invariants are:
 
-1. **Authentication != Authorisation**: A valid authentication credential establishes *who you are* (a person with a unique identity record), but provides **zero standing** inside the ecosystem.
-2. **Organisation as Root Entity**: Access rights exist solely through an `ACTIVE` membership within an `ACTIVE` organisation.
-3. **Roles Attach to Memberships, Never to People**: A person may be a `business_owner` in Org A and an `intern` in Org B. Context resolution isolates these scopes entirely.
-4. **Segregation of Authority Paths**: Platform staff belong to a designated Platform Organisation (`portal = 'platform'`). Platform credentials have zero implicit access to subscriber tenant records, and subscriber credentials cannot reach platform administrative endpoints.
-5. **Server-Resolved Ground Truth**: Client headers and payloads provide untrusted selectors (such as a requested context ID). The server evaluates identity, session, membership, organisation lifecycle, entitlements, and AAL levels before returning an `ALLOW`.
+1. **Authentication != Authorisation**: Authentication proves identity (`users` mirror). A valid password or session grants zero standing on its own.
+2. **Deny by Default**: Every gate must pass; any failure results in strict DENY.
+3. **Organisation as Root Entity**: Standing exists solely through an `ACTIVE` membership within an `ACTIVE` organisation.
+4. **Roles Attach to Memberships, Never to People**: Roles are data rows evaluated in the context of a specific organisation.
+5. **Separation of Authority Paths**: Platform staff belong to a designated Platform Organisation (`portal = 'platform'`). Platform roles have no standing inside subscriber tenants without time-boxed, reasoned, audited support access.
+6. **Immutable Audit Trail**: State transitions and approvals are logged to an append-only ledger protected by triggers and privilege revocation.
 
 ---
 
-## 2. Lineage: Reuse vs. Replace (from Reference Architecture)
+## 2. Lineage: Reused vs. Changed from V05 Reference
 
-| Component | Legacy / Reference Pattern | ArchScale V05 Implementation | Status |
+| Component | Legacy Pattern | ArchScale V05 Implementation | Status |
 | :--- | :--- | :--- | :--- |
-| **User Table** | Contained role column, organization IDs, or admin flags. | `users` is an identity-mirror table (`id`, `user_code`, `email`, `phone`). Zero role, tenant, or entitlement columns. | **REPLACED** |
-| **Tenant Types** | Hardcoded code enum or config constants. | `tenant_types` table (`key PRIMARY KEY`, `name`, `description`, `is_active`). Founder-extensible at runtime without DDL or redeployment. | **REPLACED** |
-| **Platform Authority** | Superuser bypass flag or wildcard role. | Segregated platform organisation (`portal = 'platform'`), enforced by partial unique index `((true)) WHERE portal = 'platform'`. Platform roles never work in tenant scopes without time-boxed `support_access_grants`. | **REPLACED** |
-| **Role Matrix** | Static TypeScript/Python enums (`Role.ADMIN`). | Data-driven tables (`roles`, `role_permissions`, `tenant_role_permission_templates`, `access_profiles`). Level integer ceilings (0-100) enforce anti-privilege escalation in SQL. | **REPLACED** |
-| **Permission Evaluation** | Implicit grant logic or client claim checks. | Exact module-registered permission keys evaluated against membership role/profile and verified context. | **REUSED PATTERN** (Adopted from `permission_grants` & `grant_covers` concept, hardened into SQL) |
-| **Context Lifespan** | Long-lived session tokens with unvalidated tenant switching. | `access_contexts` binding (user, session, org, workspace, membership, aal_level) with hard max 24h lifespan (`CHECK (expires_at <= created_at + interval '24 hours')`) validated via `is_context_valid()`. | **REPLACED** |
-| **Audit Trails** | Mutable or best-effort log records. | Append-only `audit_logs` table protected by immutability triggers (blocking `UPDATE`, `DELETE`, `TRUNCATE`) and privilege revocation. | **REPLACED** |
+| **User Identity** | Roles and tenant references stored on user records. | `users` is an identity mirror (`id`, `user_code`, `email`, `phone`). Zero role/tenant standing. | **REPLACED** |
+| **Tenant Types** | Hardcoded enum or application constants. | `tenant_types` table (`key PRIMARY KEY`, `name`, `description`, `is_active`). Extensible at runtime by founders without DDL. | **REPLACED** |
+| **Platform Org Isolation** | Superuser flag or bypassed tenant checks. | Single Platform Organisation enforced in SQL via `CREATE UNIQUE INDEX ON organisations ((true)) WHERE portal = 'platform'`. | **REPLACED** |
+| **Tenant Nullability** | Arbitrary tenant type assignments. | Enforced by check constraint: `CHECK ((portal = 'platform' AND tenant_type_key IS NULL) OR (portal = 'subscriber' AND tenant_type_key IS NOT NULL))`. | **REPLACED** |
+| **Role Matrix** | Code enums (`Role.ADMIN`). | Relational tables (`roles`, `role_permissions`, `tenant_role_permission_templates`, `access_profiles`). Integer levels (0–100) enforce anti-escalation. | **REPLACED** |
+| **Permission Grants** | Ad-hoc permission strings. | Exact module-registered keys (`permissions`). Evaluated via role and profile grants. | **REUSED PATTERN** (Hardened into SQL) |
+| **Context Lifetime** | Unbounded sessions. | `access_contexts` table with hard check `expires_at <= created_at + interval '24 hours'`, validated via `is_context_valid()`. | **REPLACED** |
+| **Audit Logs** | Mutable logs in app files or tables. | `audit_logs` protected by triggers blocking `UPDATE`, `DELETE`, `TRUNCATE`, with privileges revoked from runtime role and public. | **REPLACED** |
+| **Approvals** | Code-level if checks. | Stored functions `fn_approve_organisation` and `fn_approve_membership` executing under `SECURITY DEFINER` and `SELECT ... FOR UPDATE` row locks. | **REPLACED** |
 
 ---
 
-## 3. Database Schema Blueprint (Migrations 001 - 004)
+## 3. Database Invariants & Enforcement Matrix
 
-### Migration 001: Core Types & Identities
-- **Enums**:
-  - `org_status`: `APPLIED`, `PENDING_REVIEW`, `APPROVED`, `ACTIVE`, `SUSPENDED`, `OFFBOARDED`
-  - `membership_status`: `INVITED`, `REQUESTED`, `PENDING_APPROVAL`, `APPROVED`, `REJECTED`, `ACTIVE`, `SUSPENDED`, `EXPIRED`, `REVOKED`
-  - `request_status`: `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`
-  - `portal_type`: `platform`, `subscriber`
-  - `aal_level`: `aal1`, `aal2`, `aal3`
-- **Tables**:
-  - `tenant_types`: Founder-extensible catalogue (`studio_owner`, `project_owner`, `allied_owner`).
-  - `organisations`:
-    - Enforces single platform organisation:
-      ```sql
-      CREATE UNIQUE INDEX idx_single_platform_org ON organisations ((true)) WHERE portal = 'platform';
-      ```
-    - Enforces tenant type nullability rule:
-      ```sql
-      CONSTRAINT chk_org_portal_tenant_type CHECK (
-        (portal = 'platform' AND tenant_type_key IS NULL) OR 
-        (portal = 'subscriber' AND tenant_type_key IS NOT NULL)
-      )
-      ```
-  - `users`: Identity mirror with unique `user_code` and contact info; strictly no standing or authorization data.
-- **RLS**: Row-Level Security enabled on all tables from creation.
+| Invariant | Enforcement Point | Technical Implementation |
+| :--- | :--- | :--- |
+| **Single Platform Org** | Table Index | `CREATE UNIQUE INDEX ON organisations ((true)) WHERE portal = 'platform';` |
+| **Tenant Type Nullability** | Check Constraint | `CHECK ((portal = 'platform' AND tenant_type_key IS NULL) OR (portal = 'subscriber' AND tenant_type_key IS NOT NULL))` on `organisations` |
+| **Separation of Duties** | Database Trigger | `trg_approval_step_invariants` on `approval_steps` aborts if `decider_user_id == requester_user_id` |
+| **Level Ceiling** | Database Trigger | `trg_approval_step_invariants` on `approval_steps` aborts if `approver_level <= target_role_level` |
+| **Expiry Required Roles** | Database Trigger | `trg_memberships_expiry_enforcement` aborts if `roles.expiry_required = true` and `memberships.expires_at IS NULL` |
+| **Active Org Dependency** | Database Trigger | `trg_memberships_org_active_check` aborts activating a membership if parent org `status <> 'ACTIVE'` |
+| **Custodian Protection** | Database Trigger | `trg_memberships_custodian_protection` protects last active founder and last active business owner, with suspension exemption |
+| **Lifecycle Suspension Cascade** | Database Trigger | `trg_org_suspension_cascade` on `organisations` revokes all active contexts and suspends memberships upon org suspension |
+| **Seat Allocation Limit** | Check Constraint + Row Locks | `CHECK (allocated_seats <= seat_limit)` on `organisation_seats` + `SELECT ... FOR UPDATE` in `fn_approve_membership` |
+| **Max Context Lifespan** | Check Constraint | `CHECK (expires_at <= created_at + interval '24 hours')` on `access_contexts` |
+| **Support Access Rules** | Check + Trigger | `CHECK (expires_at <= started_at + interval '24 hours')` + trigger enforcing platform staff and subscriber target |
+| **Single Share Target** | Check Constraint | `CHECK (num_nonnulls(target_org_id, target_user_id) = 1)` on `share_grants` |
+| **Audit Immutability** | Triggers + Privileges | `trg_audit_logs_immutable` (UPDATE/DELETE) + `trg_audit_logs_no_truncate` (TRUNCATE) + `REVOKE` privileges |
+| **Least Privilege DB Role** | Role Grants | `archscale_app_runtime` has NO SUPERUSER, NO CREATEDB, NO BYPASSRLS, and DDL rights revoked |
 
-### Migration 002: Ecosystem Apps & Entitlements
-- **Tables**:
-  - `app_catalogue`: Applications registered in ArchScale with eligible tenant types.
-  - `organisation_entitlements`: Many-to-many licensing linking organisations to licensed apps.
-  - `organisation_seats`:
-    - Defines seat limits per (organisation, app, role).
-    - Hard check: `CONSTRAINT chk_seats_allocated_lte_limit CHECK (allocated_seats <= seat_limit)`.
-- **RLS**: Row-Level Security enabled on all tables from creation.
+---
 
-### Migration 003: Data-Driven Roles & Permissions
-- **Tables**:
-  - `permissions`: Exact module-registered permission strings (e.g., `org.members.manage`, `billing.invoices.view`).
-  - `roles`: Role definitions with integer level (0-100), portal segregation, minimum AAL, and expiry requirements.
-  - `role_tenant_types`: Allowed tenant types per role.
-  - `role_permissions`: Core permission mapping per role.
-  - `tenant_role_permission_templates`: Default permission templates per (tenant_type x role).
-  - `access_profiles`: Custom runtime profiles for role families (e.g. `manager_coordinator` profiles).
-  - `access_profile_permissions`: Fine-grained permission assignments per profile.
-- **Seeds**:
-  - Seeds default tenant types (`studio_owner`, `project_owner`, `allied_owner`).
-  - Seeds the single Platform Organisation (`portal = 'platform'`, `name = 'ArchScale Platform'`, `status = 'ACTIVE'`).
-  - Seeds Platform roles (`founder` lvl 100 AAL2, `developer` lvl 70, `client_servicing` lvl 50, `accounts` lvl 50).
-  - Seeds Subscriber roles (`business_owner` lvl 80 AAL2, `leader` lvl 60, `manager_coordinator` lvl 40, `executive` lvl 30, `intern` lvl 20 [expiry required], `collaborator` lvl 10 [expiry required], `guest` lvl 5 [expiry required]).
-  - Seeds permission matrix and role associations.
-- **RLS**: Row-Level Security enabled on all tables from creation.
+## 4. Complete Table Directory (27 Tables)
 
-### Migration 004: Workspaces, Memberships, & Contexts
-- **Tables**:
-  - `workspaces`: Scoped project/department workspaces within organisations.
-  - `memberships`:
-    - Links `(user_id, organisation_id)` with `role_key`, optional `profile_id`, status, and optional `expires_at`.
-    - Unique constraint: exactly one membership per user per organisation (`UNIQUE (user_id, organisation_id)`).
-  - `membership_seats`: Explicit seat allocation linking membership to an app.
-  - `access_contexts`:
-    - Context binding `(user_id, session_id, organisation_id, workspace_id, membership_id, aal_level)`.
-    - Hard check: `CONSTRAINT chk_context_max_24h CHECK (expires_at <= created_at + interval '24 hours')`.
-  - `invitations`: Hashed token invitation records.
-  - `role_assignment_history`: Audit record of membership role changes.
-- **Validation Function**:
-  - `is_context_valid(p_context_id UUID) -> BOOLEAN`:
-    Validates that `revoked_at IS NULL`, `expires_at > now()`, `membership.status = 'ACTIVE'`, `membership.expires_at > now()`, `organisation.status = 'ACTIVE'`, and `workspace.is_active = true`.
-- **RLS**: Row-Level Security enabled on all tables from creation.
+1. `tenant_types`: Founder-extensible tenant types (`studio_owner`, `project_owner`, `allied_owner`).
+2. `organisations`: Multi-tenant organization records with status lifecycle and portal type.
+3. `users`: Identity mirror records (`id`, `user_code`, `email`, `phone`).
+4. `app_catalogue`: Ecosystem application registry.
+5. `organisation_entitlements`: Many-to-many licensing linking organisations to licensed apps.
+6. `organisation_seats`: Purchased seat limits and allocated counts per app and role.
+7. `permissions`: Exact module-registered permission keys.
+8. `roles`: Data-driven roles with integer levels, portal segregation, and AAL requirements.
+9. `role_tenant_types`: Allowed tenant types per role.
+10. `role_permissions`: Core permission mappings per role.
+11. `tenant_role_permission_templates`: Default permission templates per (tenant_type x role).
+12. `access_profiles`: Custom runtime profiles for role families (e.g. `manager_coordinator` variants).
+13. `access_profile_permissions`: Fine-grained permission assignments per profile.
+14. `workspaces`: Scoped project/department workspaces within organisations.
+15. `memberships`: Binds `(user_id, organisation_id)` with `role_key`, optional `profile_id`, and status.
+16. `membership_seats`: Explicit seat allocation bindings.
+17. `access_contexts`: Validated 24h context binding User + Session + Org + Workspace + Membership.
+18. `invitations`: Hashed token invitation records.
+19. `role_assignment_history`: Audit record of membership role mutations.
+20. `approval_policies`: Organization approval configuration.
+21. `access_requests`: Request records for organization onboarding and membership joining.
+22. `approval_steps`: Multi-step routing, decisions, deciders, and justifications.
+23. `support_access_grants`: Time-boxed, reasoned platform staff access into tenant data.
+24. `share_grants`: Cross-organization and external guest/collaborator record grants.
+25. `auth_rate_limits`: Atomic database store for rate limiting.
+26. `account_lockouts`: Lockout tracking with administrative unlock.
+27. `audit_logs`: Append-only immutable audit ledger.
+
+---
+
+## 5. How to Run Migrations & Test Suites
+
+### Prerequisites
+- Node.js v24 LTS
+- Live PostgreSQL instance (running on `127.0.0.1:5433` or standard port configured via `PGPORT`)
+
+### Commands
+```bash
+# Install dependencies
+npm install
+
+# Run the complete conformance test suite (7 test files, 29 assertions on real PostgreSQL)
+npm test
+
+# Run the end-to-end happy-path and failing-variant walkthrough
+npm run walkthrough
+```

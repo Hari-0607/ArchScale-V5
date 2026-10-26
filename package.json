@@ -6,6 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "walkthrough": "vitest run scripts/phase1_walkthrough.ts",
     "build": "tsc"
   },
   "keywords": ["auth", "security", "multi-tenant", "rbac", "rls"],
