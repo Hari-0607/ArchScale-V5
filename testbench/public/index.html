@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArchScale V05 | Auth Layer Testbench</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #090D16;
+            --bg-surface: #111827;
+            --bg-card: #182234;
+            --bg-input: #0F172A;
+            --border-color: #273549;
+            --text-main: #F3F4F6;
+            --text-muted: #94A3B8;
+            --accent-cyan: #06B6D4;
+            --accent-blue: #3B82F6;
+            --accent-green: #10B981;
+            --accent-amber: #F59E0B;
+            --accent-rose: #F43F5E;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 24px;
+        }
+
+        .container {
+            max-width: 1380px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.8));
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            margin-bottom: 24px;
+        }
+
+        .brand-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-title h1 {
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(90deg, #38BDF8, #818CF8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .tag {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(6, 182, 212, 0.15);
+            color: var(--accent-cyan);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+            text-transform: uppercase;
+        }
+
+        .db-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--accent-green);
+            background: rgba(16, 185, 129, 0.1);
+            padding: 6px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-green);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.9); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            padding: 18px 20px;
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
+        }
+
+        .stat-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 800;
+            color: var(--text-main);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Layout Columns */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .panel-title {
+            font-size: 16px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Attack Buttons */
+        .attack-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .btn-attack {
+            background: rgba(244, 63, 94, 0.08);
+            border: 1px solid rgba(244, 63, 94, 0.25);
+            color: #FDA4AF;
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .btn-attack:hover {
+            background: rgba(244, 63, 94, 0.18);
+            border-color: rgba(244, 63, 94, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .btn-attack small {
+            font-size: 11px;
+            color: #94A3B8;
+            font-weight: 400;
+        }
+
+        /* Live Terminal */
+        .terminal-box {
+            background: #050811;
+            border: 1px solid #1E293B;
+            border-radius: 10px;
+            padding: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            min-height: 180px;
+            max-height: 240px;
+            overflow-y: auto;
+            color: #A5F3FC;
+            line-height: 1.6;
+        }
+
+        .terminal-line {
+            margin-bottom: 6px;
+        }
+
+        .terminal-line.error {
+            color: #FB7185;
+        }
+
+        .terminal-line.success {
+            color: #34D399;
+        }
+
+        .terminal-line.info {
+            color: #94A3B8;
+        }
+
+        /* Tables */
+        .table-responsive {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid rgba(39, 53, 73, 0.4);
+            color: var(--text-main);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .badge {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 6px;
+            text-transform: uppercase;
+        }
+
+        .badge-active { background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-applied { background: rgba(245, 158, 11, 0.15); color: #FBBF24; border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-suspended { background: rgba(244, 63, 94, 0.15); color: #FB7185; border: 1px solid rgba(244, 63, 94, 0.3); }
+
+        .btn-action {
+            background: linear-gradient(135deg, #0EA5E9, #6366F1);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .btn-action:hover {
+            opacity: 0.9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="brand-title">
+                <h1>ArchScale V05</h1>
+                <span class="tag">Auth Layer Phase 1</span>
+            </div>
+            <div class="db-badge">
+                <div class="pulse-dot"></div>
+                <span>PostgreSQL 18.3 Live (Port 5433)</span>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Organisations</div>
+                <div class="stat-value" id="stat-orgs">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Memberships</div>
+                <div class="stat-value" id="stat-members">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">App Seats (Allocated / Limit)</div>
+                <div class="stat-value" id="stat-seats">- / -</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Immutable Audit Records</div>
+                <div class="stat-value" id="stat-audit">-</div>
+            </div>
+        </div>
+
+        <!-- Main Workspace -->
+        <div class="main-grid">
+            <!-- Left: Attack Invariant Sandbox -->
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span>🛡️ Invariant Sandbox & Attack Defense Simulator</span>
+                    </div>
+                </div>
+                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+                    Click any attack button below to trigger an invariant breach. Watch PostgreSQL's triggers and constraints defend the system in real time.
+                </p>
+
+                <div class="attack-grid">
+                    <button class="btn-attack" onclick="triggerAttack('duplicate_platform_org')">
+                        <span>💥 Attempt 2nd Platform Org</span>
+                        <small>Unique Partial Index Defense</small>
+                    </button>
+                    <button class="btn-attack" onclick="triggerAttack('audit_update')">
+                        <span>💥 Tamper Audit Log (UPDATE)</span>
+                        <small>Immutable Trigger Defense</small>
+                    </button>
+                    <button class="btn-attack" onclick="triggerAttack('audit_delete')">
+                        <span>💥 Delete Audit Log (DELETE)</span>
+                        <small>Append-Only Block Defense</small>
+                    </button>
+                    <button class="btn-attack" onclick="triggerAttack('audit_truncate')">
+                        <span>💥 Truncate Audit Log (TRUNCATE)</span>
+                        <small>Statement Trigger Defense</small>
+                    </button>
+                    <button class="btn-attack" onclick="triggerAttack('active_member_nonactive_org')">
+                        <span>💥 Join Non-ACTIVE Org</span>
+                        <small>Parent Lifecycle Check</small>
+                    </button>
+                    <button class="btn-attack" onclick="triggerAttack('intern_no_expiry')">
+                        <span>💥 Intern Without Expiration</span>
+                        <small>Role Expiry Requirement</small>
+                    </button>
+                    <button class="btn-attack" onclick="triggerAttack('delete_last_founder')">
+                        <span>💥 Remove Last Founder</span>
+                        <small>Custodian Protection Trigger</small>
+                    </button>
+                    <button class="btn-attack" onclick="triggerAttack('both_targets_share_grant')">
+                        <span>💥 Share With Both Targets</span>
+                        <small>Target Exclusivity Check</small>
+                    </button>
+                </div>
+
+                <div class="panel-header" style="margin-top: 10px; margin-bottom: 8px;">
+                    <div class="panel-title" style="font-size: 13px; color: var(--text-muted);">
+                        <span>💻 Live Database Defense Log:</span>
+                    </div>
+                </div>
+                <div class="terminal-box" id="terminal">
+                    <div class="terminal-line info">> Connected to PostgreSQL 18.3 at 127.0.0.1:5433</div>
+                    <div class="terminal-line info">> All 27 tables initialized with Row-Level Security (RLS) enabled.</div>
+                    <div class="terminal-line info">> Ready. Click any scenario above to observe database invariants.</div>
+                </div>
+            </div>
+
+            <!-- Right: Conformance Runner & Seat Allocations -->
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <span>⚡ Automated Conformance Suite</span>
+                    </div>
+                    <button class="btn-action" id="btn-run-tests" onclick="runVitestSuite()">Run 29 Tests</button>
+                </div>
+                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+                    Executes the full test suite (schema, invariants, cascade, atomic approvals, seat race, immutable audit, runtime privileges) directly against PostgreSQL.
+                </p>
+                <div class="terminal-box" id="test-output" style="min-height: 275px; max-height: 290px;">
+                    <div class="terminal-line info">> Click "Run 29 Tests" to execute the full conformance pass.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Organisations Directory -->
+        <div class="panel" style="margin-bottom: 24px;">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>🏢 Organisations Directory</span>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Organisation Name</th>
+                            <th>Portal</th>
+                            <th>Tenant Type</th>
+                            <th>Status</th>
+                            <th>Members</th>
+                            <th>Created At</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orgs-table-body">
+                        <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading organisations...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Memberships Directory -->
+        <div class="panel" style="margin-bottom: 24px;">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>👥 Memberships & Role Ceilings</span>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User Code</th>
+                            <th>Email</th>
+                            <th>Organisation</th>
+                            <th>Role Key</th>
+                            <th>Authority Level</th>
+                            <th>Status</th>
+                            <th>Expiration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="members-table-body">
+                        <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading members...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Live Append-Only Audit Trail -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>📜 Append-Only Audit Ledger</span>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Action</th>
+                            <th>Target Entity</th>
+                            <th>Target ID</th>
+                            <th>Diff Details</th>
+                            <th>Timestamp</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-table-body">
+                        <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading audit trail...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                if (data.status === 'CONNECTED') {
+                    document.getElementById('stat-orgs').textContent = data.counts.organisations;
+                    document.getElementById('stat-members').textContent = data.counts.memberships;
+                    document.getElementById('stat-seats').textContent = `${data.counts.seatsAllocated} / ${data.counts.seatsTotal}`;
+                    document.getElementById('stat-audit').textContent = data.counts.auditLogs;
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function fetchOrganisations() {
+            try {
+                const res = await fetch('/api/organisations');
+                const data = await res.json();
+                const tbody = document.getElementById('orgs-table-body');
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No organisations found.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.map(o => `
+                    <tr>
+                        <td style="font-weight: 600;">${o.name}</td>
+                        <td><span class="badge" style="background: rgba(99, 102, 241, 0.15); color: #818CF8;">${o.portal}</span></td>
+                        <td>${o.tenant_type_key || '<span style="color:#64748B;">None (Platform)</span>'}</td>
+                        <td><span class="badge badge-${o.status.toLowerCase()}">${o.status}</span></td>
+                        <td>${o.member_count}</td>
+                        <td>${new Date(o.created_at).toLocaleDateString()}</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function fetchMemberships() {
+            try {
+                const res = await fetch('/api/memberships');
+                const data = await res.json();
+                const tbody = document.getElementById('members-table-body');
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No memberships found.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.map(m => `
+                    <tr>
+                        <td style="font-family: 'JetBrains Mono'; color: #38BDF8;">${m.user_code}</td>
+                        <td>${m.email}</td>
+                        <td>${m.org_name}</td>
+                        <td style="font-weight: 600;">${m.role_key}</td>
+                        <td><span class="badge" style="background: rgba(6, 182, 212, 0.15); color: #22D3EE;">Level ${m.level}</span></td>
+                        <td><span class="badge badge-${m.status.toLowerCase()}">${m.status}</span></td>
+                        <td>${m.expires_at ? new Date(m.expires_at).toLocaleDateString() : '<span style="color:#64748B;">None</span>'}</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function fetchAuditLogs() {
+            try {
+                const res = await fetch('/api/audit');
+                const data = await res.json();
+                const tbody = document.getElementById('audit-table-body');
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No audit entries yet.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.map(a => `
+                    <tr>
+                        <td style="font-weight: 600; color: #38BDF8;">${a.action}</td>
+                        <td>${a.target_entity}</td>
+                        <td style="font-family: 'JetBrains Mono'; font-size: 11px;">${a.target_id}</td>
+                        <td style="font-family: 'JetBrains Mono'; font-size: 11px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            ${a.diff ? JSON.stringify(a.diff) : '-'}
+                        </td>
+                        <td>${new Date(a.created_at).toLocaleTimeString()}</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function triggerAttack(attackType) {
+            const terminal = document.getElementById('terminal');
+            terminal.innerHTML += `<div class="terminal-line info">> [ATTACK INITIATED]: Testing ${attackType}...</div>`;
+            terminal.scrollTop = terminal.scrollHeight;
+
+            try {
+                const res = await fetch('/api/attack', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ attackType })
+                });
+                const result = await res.json();
+
+                if (result.blocked) {
+                    terminal.innerHTML += `<div class="terminal-line success">✓ [DEFENDED BY POSTGRESQL]: Operation Aborted.</div>`;
+                    terminal.innerHTML += `<div class="terminal-line error">  Error Code: ${result.errorCode}</div>`;
+                    terminal.innerHTML += `<div class="terminal-line error">  Message: ${result.errorMessage}</div>`;
+                } else {
+                    terminal.innerHTML += `<div class="terminal-line error">❌ ${result.message}</div>`;
+                }
+                terminal.scrollTop = terminal.scrollHeight;
+            } catch (err) {
+                terminal.innerHTML += `<div class="terminal-line error">Fetch error: ${err.message}</div>`;
+            }
+        }
+
+        async function runVitestSuite() {
+            const btn = document.getElementById('btn-run-tests');
+            const outputBox = document.getElementById('test-output');
+            btn.disabled = true;
+            btn.textContent = 'Running Tests...';
+            outputBox.innerHTML = '<div class="terminal-line info">> Spawning Vitest process against PostgreSQL 18.3...</div>';
+
+            try {
+                const res = await fetch('/api/run-tests', { method: 'POST' });
+                const result = await res.json();
+                
+                outputBox.innerHTML = `<pre style="color: ${result.success ? '#34D399' : '#FB7185'}; white-space: pre-wrap; font-size: 11px;">${result.output}</pre>`;
+                btn.disabled = false;
+                btn.textContent = 'Run 29 Tests';
+                
+                // Refresh table statistics
+                fetchStatus();
+                fetchOrganisations();
+                fetchMemberships();
+                fetchAuditLogs();
+            } catch (err) {
+                outputBox.innerHTML = `<div class="terminal-line error">Failed to run tests: ${err.message}</div>`;
+                btn.disabled = false;
+                btn.textContent = 'Run 29 Tests';
+            }
+        }
+
+        // Initial Load
+        fetchStatus();
+        fetchOrganisations();
+        fetchMemberships();
+        fetchAuditLogs();
+        setInterval(fetchStatus, 5000);
+    </script>
+</body>
+</html>
