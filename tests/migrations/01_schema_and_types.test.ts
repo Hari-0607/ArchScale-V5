@@ -138,7 +138,7 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
         )).rows[0].id;
 
         const membership = (await pool.query<{ id: string }>(
-            `INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ('${user}', '${org}', 'business_owner', 'ACTIVE') RETURNING id;`
+            `INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ('${user}', '${org}', 'leader', 'ACTIVE') RETURNING id;`
         )).rows[0].id;
 
         const context = (await pool.query<{ id: string }>(

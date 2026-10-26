@@ -25,6 +25,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_entity, ta
 
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 
+CREATE POLICY audit_logs_insert_policy ON audit_logs FOR INSERT WITH CHECK (true);
+CREATE POLICY audit_logs_select_policy ON audit_logs FOR SELECT USING (true);
+
 -- -----------------------------------------------------------------------------
 -- Trigger: Strictly block UPDATE and DELETE on audit_logs
 -- -----------------------------------------------------------------------------
