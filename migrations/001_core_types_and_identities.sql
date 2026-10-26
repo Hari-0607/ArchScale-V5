@@ -3,7 +3,14 @@
 -- ArchScale V05 Authentication & Authorisation Layer
 -- =============================================================================
 
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- Ensure uuid generation is available (gen_random_uuid() is built-in for PG 13+)
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+EXCEPTION WHEN OTHERS THEN
+    -- pgcrypto not bundled; PostgreSQL 13+ provides native gen_random_uuid()
+    NULL;
+END $$;
 
 -- Fixed Lifecycles and Core Classifications
 DO $$
