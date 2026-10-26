@@ -1,12 +1,14 @@
 {
   "name": "archscale-v05-auth",
   "version": "0.5.0",
+  "type": "module",
   "description": "ArchScale V05 Organisation-First Auth and Authorisation Layer",
   "main": "dist/index.js",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "walkthrough": "vitest run scripts/phase1_walkthrough.ts",
+    "testbench": "node testbench/server.js",
     "build": "tsc"
   },
   "keywords": ["auth", "security", "multi-tenant", "rbac", "rls"],
