@@ -1,0 +1,22 @@
+{
+  "name": "archscale-v05-auth",
+  "version": "0.5.0",
+  "description": "ArchScale V05 Organisation-First Auth and Authorisation Layer",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc"
+  },
+  "keywords": ["auth", "security", "multi-tenant", "rbac", "rls"],
+  "author": "ArchScale Platform Team",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.14",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
