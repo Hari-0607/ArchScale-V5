@@ -74,11 +74,25 @@ BEGIN
     END LOOP;
 END $$;
 
--- Re-grant operational privileges to archscale_app_runtime only
-GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO archscale_app_runtime;
-REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM archscale_app_runtime, PUBLIC;
-GRANT SELECT, INSERT ON audit_logs TO archscale_app_runtime;
-GRANT EXECUTE ON FUNCTION is_context_valid(UUID) TO archscale_app_runtime;
-GRANT EXECUTE ON FUNCTION fn_approve_organisation TO archscale_app_runtime;
-GRANT EXECUTE ON FUNCTION fn_approve_membership TO archscale_app_runtime;
-GRANT EXECUTE ON FUNCTION fn_set_app_context(UUID) TO archscale_app_runtime;
+-- -----------------------------------------------------------------------------
+-- 4. Default Privileges & Forced RLS Lockdown for Current and Future Objects
+-- -----------------------------------------------------------------------------
+-- Confirm RLS is explicitly enabled and forced on every table in schema public
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY;', r.tablename);
+        EXECUTE format('ALTER TABLE public.%I FORCE ROW LEVEL SECURITY;', r.tablename);
+    END LOOP;
+END $$;
+
+-- Default privileges for future tables/sequences/routines
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated, PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated, PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON ROUTINES FROM anon, authenticated, PUBLIC;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO archscale_app_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO archscale_app_runtime;
+
