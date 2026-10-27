@@ -1,27 +1,55 @@
 import pg from 'pg';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
 const { Pool, Client } = pg;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Load .env natively
+const envPath = path.resolve(__dirname, '../../.env');
+if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf-8').split(/\r?\n/);
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith('#')) {
+            const idx = trimmed.indexOf('=');
+            if (idx !== -1) {
+                const k = trimmed.substring(0, idx).trim();
+                const v = trimmed.substring(idx + 1).trim();
+                if (!process.env[k]) process.env[k] = v;
+            }
+        }
+    }
+}
+
+const testDbUrl = process.env.ARCHSCALE_TEST_DB_URL;
+if (!testDbUrl) {
+    throw new Error(
+        'Missing ARCHSCALE_TEST_DB_URL in .env. Local tests require ARCHSCALE_TEST_DB_URL to be set (e.g. postgresql://<user>:<password>@127.0.0.1:<port>/postgres).'
+    );
+}
+
+const parsedUrl = new URL(testDbUrl);
 
 export const DB_CONFIG: pg.PoolConfig = {
-    host: process.env.PGHOST || '127.0.0.1',
-    port: parseInt(process.env.PGPORT || '5433', 10),
-    user: process.env.PGUSER || 'postgres',
-    password: process.env.PGPASSWORD || '',
-    database: 'postgres'
+    host: parsedUrl.hostname,
+    port: parseInt(parsedUrl.port || '5432', 10),
+    user: parsedUrl.username,
+    password: decodeURIComponent(parsedUrl.password),
+    database: parsedUrl.pathname.replace('/', '') || 'postgres'
 };
 
 export const RUNTIME_CONFIG: pg.PoolConfig = {
-    host: process.env.PGHOST || '127.0.0.1',
-    port: parseInt(process.env.PGPORT || '5433', 10),
+    host: parsedUrl.hostname,
+    port: parseInt(parsedUrl.port || '5432', 10),
     user: 'archscale_app_runtime',
     password: 'archscale_runtime_local_pass',
-    database: 'postgres'
+    database: parsedUrl.pathname.replace('/', '') || 'postgres'
 };
 
 export async function createIsolatedTestDatabase(testDbName: string): Promise<pg.Pool> {
-    // 1. Connect to default postgres database to drop/create the isolated test DB
+    // 1. Connect to default database to drop/create the isolated test DB
     const adminClient = new Client(DB_CONFIG);
     await adminClient.connect();
     
@@ -51,7 +79,8 @@ export async function createIsolatedTestDatabase(testDbName: string): Promise<pg
         '006_share_grants_and_security_controls.sql',
         '007_append_only_audit_log.sql',
         '008_database_invariants_and_functions.sql',
-        '009_least_privilege_runtime_role.sql'
+        '009_least_privilege_runtime_role.sql',
+        '010_supabase_staging_compatibility.sql'
     ];
 
     for (const file of migrationFiles) {
