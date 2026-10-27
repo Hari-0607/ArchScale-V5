@@ -418,8 +418,31 @@ const server = http.createServer(async (req, res) => {
 
             // 2. Founder approves it via fn_approve_organisation
             logs.push({ step: 2, action: 'Platform Founder approves organisation via fn_approve_organisation' });
-            const founderRes = await client.query("SELECT id FROM memberships WHERE role_key = 'founder' LIMIT 1;");
-            const founderMemId = founderRes.rows[0]?.id || '99e5fe93-4027-42c6-a6d0-6cfc1c8678b1';
+            let founderRes = await client.query("SELECT id FROM memberships WHERE role_key = 'founder' AND status = 'ACTIVE' LIMIT 1;");
+            let founderMemId = founderRes.rows[0]?.id;
+
+            if (!founderMemId) {
+                // Ensure a founder user and membership exists in the root Platform organisation
+                const fUserRes = await client.query(`
+                    INSERT INTO users (user_code, email) 
+                    VALUES ('USR-FOUNDER', 'founder@archscale.local') 
+                    ON CONFLICT (email) DO UPDATE SET user_code = EXCLUDED.user_code
+                    RETURNING id;
+                `);
+                const fUserId = fUserRes.rows[0].id;
+                const fMemRes = await client.query(`
+                    INSERT INTO memberships (user_id, organisation_id, role_key, status)
+                    VALUES ('${fUserId}', '00000000-0000-0000-0000-000000000001', 'founder', 'ACTIVE')
+                    ON CONFLICT DO NOTHING
+                    RETURNING id;
+                `);
+                if (fMemRes.rows.length > 0) {
+                    founderMemId = fMemRes.rows[0].id;
+                } else {
+                    const existingFMem = await client.query(`SELECT id FROM memberships WHERE user_id = '${fUserId}' AND organisation_id = '00000000-0000-0000-0000-000000000001';`);
+                    founderMemId = existingFMem.rows[0].id;
+                }
+            }
 
             const seatLimits = JSON.stringify([
                 { app_key: 'app_bim', role_key: 'business_owner', seat_limit: 1 },
