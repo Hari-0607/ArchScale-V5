@@ -1327,8 +1327,6 @@
         // 1. SIMULATOR
         function renderSimulatorDropdowns() {
             const userSelect = document.getElementById('sim-user');
-        function populateSimSelectors() {
-            const userSelect = document.getElementById('sim-user');
             const orgSelect = document.getElementById('sim-org');
             const permSelect = document.getElementById('sim-perm');
             const presetContainer = document.getElementById('preset-container');
@@ -1396,11 +1394,91 @@
             onUserSelectChange();
         }
 
+        function onUserSelectChange() {
+            const userSelect = document.getElementById('sim-user');
+            const selectedOption = userSelect.options[userSelect.selectedIndex];
+            if (selectedOption) {
+                const orgId = selectedOption.getAttribute('data-org');
+                if (orgId) {
+                    document.getElementById('sim-org').value = orgId;
+                }
+            }
+        }
+
+        function onOrgSelectChange() {
+            // Keep as is
+        }
+
         function selectLiveUser(userId, orgId) {
             const userSelect = document.getElementById('sim-user');
             const orgSelect = document.getElementById('sim-org');
             if (userSelect && userId) userSelect.value = userId;
             if (orgSelect && orgId) orgSelect.value = orgId;
+        }
+
+        async function evaluateDecision() {
+            const userId = document.getElementById('sim-user').value;
+            const organisationId = document.getElementById('sim-org').value;
+            const permissionKey = document.getElementById('sim-perm').value;
+
+            if (!userId) {
+                alert('No live user selected. There are currently 0 users in the baseline PostgreSQL database.');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/evaluate-policy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, organisationId, permissionKey })
+                });
+
+                const data = await res.json();
+                renderDecisionResult(data);
+            } catch (err) {
+                alert('Evaluation failed: ' + err.message);
+            }
+        }
+
+        function renderDecisionResult(data) {
+            const box = document.getElementById('decision-box');
+            const pill = document.getElementById('decision-pill');
+            const code = document.getElementById('decision-code');
+            const summary = document.getElementById('decision-summary');
+            const metaActor = document.getElementById('meta-actor');
+            const metaRole = document.getElementById('meta-role');
+            const metaOrg = document.getElementById('meta-org');
+            const metaPerm = document.getElementById('meta-perm');
+            const pipeline = document.getElementById('rules-pipeline');
+            const timestamp = document.getElementById('decision-timestamp');
+
+            timestamp.textContent = new Date().toLocaleTimeString();
+
+            const isAllow = data.decision === 'ALLOW';
+            box.className = 'decision-box ' + (isAllow ? 'allow' : 'deny');
+            pill.className = 'decision-pill ' + (isAllow ? 'allow' : 'deny');
+            pill.innerHTML = isAllow ? '✓ ALLOW (AUTHORISED)' : '✕ DENY (ACCESS BLOCKED)';
+            code.textContent = 'RULE_VERDICT_' + data.decision;
+            summary.textContent = data.summary;
+
+            if (data.actor) {
+                metaActor.textContent = data.actor.email;
+                metaRole.textContent = `${data.actor.role} (Level ${data.actor.level})`;
+                metaOrg.textContent = `${data.actor.orgName} (${data.actor.portal.toUpperCase()})`;
+                metaPerm.textContent = `${data.permission.name} [${data.permission.key}]`;
+            }
+
+            if (data.ruleChecks && data.ruleChecks.length) {
+                pipeline.innerHTML = data.ruleChecks.map(c => `
+                    <div class="rule-step ${c.pass ? 'pass' : 'fail'}">
+                        <span class="rule-icon ${c.pass ? 'pass' : 'fail'}">${c.pass ? '✓' : '✕'}</span>
+                        <div>
+                            <div class="rule-title">${c.name}</div>
+                            <div class="rule-detail">${c.detail}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
         }
 
         // 2. ROLE-PERMISSION MATRIX
