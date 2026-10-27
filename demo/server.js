@@ -393,6 +393,9 @@ const server = http.createServer(async (req, res) => {
         try {
             await client.query('BEGIN;');
 
+            // Ensure app catalogue entry exists
+            await client.query("INSERT INTO app_catalogue (app_key, name, description) VALUES ('app_bim', 'ArchScale BIM Studio', 'Architecture BIM Authoring') ON CONFLICT (app_key) DO NOTHING;");
+
             // 1. Create an APPLIED demo organisation
             logs.push({ step: 1, action: `Create APPLIED organisation '${demoMarker}'` });
             const ownerRes = await client.query(`
