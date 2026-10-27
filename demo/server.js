@@ -303,12 +303,12 @@ const server = http.createServer(async (req, res) => {
     // API: Panel 2 Live Database State
     if (pathname === '/api/database-state' && req.method === 'GET') {
         try {
-            const orgsRes = await pool.query('SELECT status, count(*)::int as count FROM organisations GROUP BY status ORDER BY status;');
-            const memsRes = await pool.query('SELECT status, count(*)::int as count FROM memberships GROUP BY status ORDER BY status;');
-            const rolesRes = await pool.query('SELECT key, name, portal, level FROM roles ORDER BY level DESC, key ASC;');
-            const tenantTypesRes = await pool.query('SELECT key, name, is_active FROM tenant_types ORDER BY key ASC;');
-            const auditCountRes = await pool.query('SELECT count(*)::int as count FROM audit_logs;');
-            const auditRecentRes = await pool.query(`
+            const orgsRes = await adminPool.query('SELECT status, count(*)::int as count FROM organisations GROUP BY status ORDER BY status;');
+            const memsRes = await adminPool.query('SELECT status, count(*)::int as count FROM memberships GROUP BY status ORDER BY status;');
+            const rolesRes = await adminPool.query('SELECT key, name, portal, level FROM roles ORDER BY level DESC, key ASC;');
+            const tenantTypesRes = await adminPool.query('SELECT key, name, is_active FROM tenant_types ORDER BY key ASC;');
+            const auditCountRes = await adminPool.query('SELECT count(*)::int as count FROM audit_logs;');
+            const auditRecentRes = await adminPool.query(`
                 SELECT a.created_at, a.action, a.target_entity, a.target_id,
                        COALESCE(u.email, a.actor_user_id::text, 'SYSTEM') as actor
                 FROM audit_logs a
