@@ -57,21 +57,14 @@ GRANT EXECUTE ON FUNCTION fn_set_app_context(UUID) TO archscale_app_runtime;
 DO $$
 DECLARE
     r RECORD;
+    has_anon BOOLEAN := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon');
+    has_auth BOOLEAN := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated');
+    target_roles TEXT := 'PUBLIC' || CASE WHEN has_anon THEN ', anon' ELSE '' END || CASE WHEN has_auth THEN ', authenticated' ELSE '' END;
 BEGIN
-    -- Revoke all table privileges from Supabase client roles
-    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-        EXECUTE format('REVOKE ALL PRIVILEGES ON TABLE public.%I FROM anon, authenticated, PUBLIC;', r.tablename);
-    END LOOP;
-
-    -- Revoke all sequence privileges
-    FOR r IN (SELECT sequencename FROM pg_sequences WHERE schemaname = 'public') LOOP
-        EXECUTE format('REVOKE ALL PRIVILEGES ON SEQUENCE public.%I FROM anon, authenticated, PUBLIC;', r.sequencename);
-    END LOOP;
-
-    -- Revoke all function executions
-    FOR r IN (SELECT routine_name, specific_name FROM information_schema.routines WHERE routine_schema = 'public') LOOP
-        EXECUTE format('REVOKE ALL PRIVILEGES ON ROUTINE public.%I FROM anon, authenticated, PUBLIC;', r.routine_name);
-    END LOOP;
+    -- Revoke all privileges on all schema objects from target roles
+    EXECUTE format('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM %s;', target_roles);
+    EXECUTE format('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM %s;', target_roles);
+    EXECUTE format('REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM %s;', target_roles);
 END $$;
 
 -- Operational grants to archscale_app_runtime on existing tables and functions
@@ -98,10 +91,27 @@ BEGIN
 END $$;
 
 -- Default privileges for future tables/sequences/routines
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated, PUBLIC;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated, PUBLIC;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON ROUTINES FROM anon, authenticated, PUBLIC;
+DO $$
+DECLARE
+    has_anon BOOLEAN := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon');
+    has_auth BOOLEAN := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated');
+BEGIN
+    IF has_anon THEN
+        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon;';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON ROUTINES FROM anon;';
+    END IF;
+    IF has_auth THEN
+        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM authenticated;';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM authenticated;';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON ROUTINES FROM authenticated;';
+    END IF;
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;';
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC;';
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON ROUTINES FROM PUBLIC;';
+END $$;
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO archscale_app_runtime;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO archscale_app_runtime;
+
 
