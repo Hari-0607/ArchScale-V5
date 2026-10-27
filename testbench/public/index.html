@@ -829,6 +829,45 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        .btn-action-danger {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            color: #F87171;
+            padding: 4px 8px;
+            font-size: 11px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn-action-danger:hover {
+            background: rgba(239, 68, 68, 0.3);
+        }
+        .btn-action-warn {
+            background: rgba(245, 158, 11, 0.15);
+            border: 1px solid rgba(245, 158, 11, 0.4);
+            color: #FBBF24;
+            padding: 4px 8px;
+            font-size: 11px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn-action-warn:hover {
+            background: rgba(245, 158, 11, 0.3);
+        }
+        .matrix-cell-yes.clickable, .matrix-cell-no.clickable {
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .matrix-cell-yes.clickable:hover {
+            background: rgba(239, 68, 68, 0.25) !important;
+            color: #EF4444;
+        }
+        .matrix-cell-no.clickable:hover {
+            background: rgba(16, 185, 129, 0.25) !important;
+            color: #10B981;
+        }
     </style>
 </head>
 <body>
@@ -926,6 +965,24 @@
         <!-- TAB 1: POLICY DECISION SIMULATOR -->
         <div id="tab-simulator" class="tab-panel active">
             <div class="simulator-layout">
+                <!-- Real-Time Live Testing Toolbar -->
+                <div style="grid-column: 1 / -1; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: var(--radius-md); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                    <div>
+                        <strong style="color: var(--accent-indigo-light); font-size: 13px;">⚡ Real-Time Live Testing Playground</strong>
+                        <div style="color: var(--text-secondary); font-size: 12px; margin-top: 2px;">
+                            Create real organisations, users, and roles to test authorization policies against PostgreSQL in real time.
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-primary btn-sm" onclick="quickCreateDemoOrg()">
+                            <span>➕ 1-Click Provision Test Studio & Owner</span>
+                        </button>
+                        <button class="btn btn-outline btn-sm" onclick="quickCleanTestOrgs()" style="color: #F87171; border-color: rgba(239,68,68,0.3);">
+                            <span>🗑️ Clean Test Orgs</span>
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Control Panel -->
                 <div class="card">
                     <div class="card-header">
@@ -1045,6 +1102,46 @@
                         <div class="card-subtitle">Portal segregation, tenant types, status lifecycle, and scoped workspaces</div>
                     </div>
                 </div>
+
+                <!-- Live Add Organisation Form -->
+                <div style="padding: 16px 22px; border-bottom: 1px solid var(--border-color); background: rgba(255,255,255,0.015);">
+                    <div style="font-weight: 600; font-size: 13px; margin-bottom: 10px; color: var(--accent-indigo-light);">
+                        ➕ Provision Live Organisation in PostgreSQL
+                    </div>
+                    <form onsubmit="handleCreateOrg(event)" style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+                        <div>
+                            <label class="form-label">Name</label>
+                            <input id="new-org-name" class="form-select" style="padding: 8px 12px; width: 220px;" placeholder="e.g. Apex Design Studio" required />
+                        </div>
+                        <div>
+                            <label class="form-label">Tenant Type</label>
+                            <select id="new-org-type" class="form-select" style="padding: 8px 12px; width: 160px;">
+                                <option value="studio_owner">Studio Owner</option>
+                                <option value="project_owner">Project Owner</option>
+                                <option value="allied_owner">Allied Owner</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label">Portal</label>
+                            <select id="new-org-portal" class="form-select" style="padding: 8px 12px; width: 140px;">
+                                <option value="subscriber">Subscriber</option>
+                                <option value="platform">Platform</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label">Initial Status</label>
+                            <select id="new-org-status" class="form-select" style="padding: 8px 12px; width: 130px;">
+                                <option value="ACTIVE">ACTIVE</option>
+                                <option value="APPLIED">APPLIED</option>
+                                <option value="SUSPENDED">SUSPENDED</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="height: 38px;">
+                            <span>➕ Add Organisation</span>
+                        </button>
+                    </form>
+                </div>
+
                 <div class="card-body" style="padding: 0;">
                     <div class="table-responsive">
                         <table class="data-table" id="table-orgs">
@@ -1057,6 +1154,7 @@
                                     <th>Members</th>
                                     <th>Workspaces</th>
                                     <th>Created At</th>
+                                    <th style="width: 140px;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
@@ -1075,6 +1173,39 @@
                         <div class="card-subtitle">Roles attach exclusively to memberships (never to users), with time-bounds and AAL levels</div>
                     </div>
                 </div>
+
+                <!-- Live Add Member Form -->
+                <div style="padding: 16px 22px; border-bottom: 1px solid var(--border-color); background: rgba(255,255,255,0.015);">
+                    <div style="font-weight: 600; font-size: 13px; margin-bottom: 10px; color: var(--accent-indigo-light);">
+                        ➕ Provision Live User & Assign Membership in PostgreSQL
+                    </div>
+                    <form onsubmit="handleCreateMember(event)" style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+                        <div>
+                            <label class="form-label">User Email</label>
+                            <input id="new-mem-email" type="email" class="form-select" style="padding: 8px 12px; width: 230px;" placeholder="e.g. architect@apex.local" required />
+                        </div>
+                        <div>
+                            <label class="form-label">Target Organisation</label>
+                            <select id="new-mem-org" class="form-select" style="padding: 8px 12px; width: 220px;" required>
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label">Assigned Role</label>
+                            <select id="new-mem-role" class="form-select" style="padding: 8px 12px; width: 200px;" required>
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label">Duration (Days)</label>
+                            <input id="new-mem-days" type="number" min="1" max="365" class="form-select" style="padding: 8px 12px; width: 110px;" placeholder="Optional" />
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="height: 38px;">
+                            <span>➕ Add Member</span>
+                        </button>
+                    </form>
+                </div>
+
                 <div class="card-body" style="padding: 0;">
                     <div class="table-responsive">
                         <table class="data-table" id="table-members">
@@ -1088,6 +1219,7 @@
                                     <th>Status</th>
                                     <th>AAL Requirement</th>
                                     <th>Expiration Window</th>
+                                    <th style="width: 120px;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
@@ -1313,6 +1445,7 @@
 
                 // Render Views
                 renderSimulatorDropdowns();
+                populateMemberFormDropdowns();
                 renderMatrix();
                 renderOrganisationsTable();
                 renderMembershipsTable();
@@ -1336,16 +1469,14 @@
                 if (presetContainer) {
                     presetContainer.innerHTML = `
                         <div style="font-size: 11px; color: var(--text-muted); line-height: 1.5; padding: 4px 0;">
-                            Live PostgreSQL has 0 user memberships (Seed 001 provides schema, roles, and platform org only).
-                            To test live invariant enforcement, use the 
-                            <a href="http://127.0.0.1:3001" target="_blank" style="color: var(--accent-primary); text-decoration: underline;">Phase 1 Live Proof Harness (Port 3001)</a>.
+                            Live PostgreSQL has 0 user memberships. Click <strong>"1-Click Provision Test Studio & Owner"</strong> above or use the Memberships tab to add live users in real time.
                         </div>
                     `;
                 }
             } else {
                 userSelect.innerHTML = state.memberships.map(m => `
                     <option value="${m.user_id}" data-org="${m.org_id}">
-                        ${m.email} (${m.role_name} - L${m.level}) [${m.org_name}]
+                        ${escapeHtml(m.email)} (${m.role_name} - L${m.level}) [${escapeHtml(m.org_name)}]
                     </option>
                 `).join('');
 
@@ -1355,7 +1486,7 @@
                         ${state.memberships.slice(0, 4).map(m => `
                             <button class="preset-chip" onclick="selectLiveUser('${m.user_id}', '${m.org_id}')">
                                 <span class="preset-tag allow">${m.role_name}</span>
-                                <strong>${m.email}</strong> &rarr; ${m.org_name}
+                                <strong>${escapeHtml(m.email)}</strong> &rarr; ${escapeHtml(m.org_name)}
                             </button>
                         `).join('')}
                     `;
@@ -1367,7 +1498,7 @@
             } else {
                 orgSelect.innerHTML = state.organisations.map(o => `
                     <option value="${o.id}">
-                        ${o.name} (${o.portal.toUpperCase()}) - Status: ${o.status}
+                        ${escapeHtml(o.name)} (${o.portal.toUpperCase()}) - Status: ${o.status}
                     </option>
                 `).join('');
             }
@@ -1384,7 +1515,7 @@
                 <optgroup label="${mod} MODULE">
                     ${modules[mod].map(p => `
                         <option value="${p.key}">
-                            ${p.key} - ${p.name} (${p.min_aal.toUpperCase()})
+                            ${p.key} - ${escapeHtml(p.name)} (${p.min_aal.toUpperCase()})
                         </option>
                     `).join('')}
                 </optgroup>
@@ -1422,7 +1553,7 @@
             const permissionKey = document.getElementById('sim-perm').value;
 
             if (!userId) {
-                alert('No live user selected. There are currently 0 users in the baseline PostgreSQL database.');
+                alert('No live user selected. There are currently 0 users in the baseline database.\n\nClick "1-Click Provision Test Studio & Owner" above to create real live records in PostgreSQL and test.');
                 return;
             }
 
@@ -1473,8 +1604,8 @@
                     <div class="rule-step ${c.pass ? 'pass' : 'fail'}">
                         <span class="rule-icon ${c.pass ? 'pass' : 'fail'}">${c.pass ? '✓' : '✕'}</span>
                         <div>
-                            <div class="rule-title">${c.name}</div>
-                            <div class="rule-detail">${c.detail}</div>
+                            <div class="rule-title">${escapeHtml(c.name)}</div>
+                            <div class="rule-detail">${escapeHtml(c.detail)}</div>
                         </div>
                     </div>
                 `).join('');
@@ -1492,10 +1623,10 @@
                 <table class="matrix-table">
                     <thead>
                         <tr>
-                            <th class="col-perm">Permission / Capability</th>
+                            <th class="col-perm">Permission / Capability (Click Cell to Grant/Revoke in DB)</th>
                             ${roles.map(r => `
                                 <th class="col-role">
-                                    <div>${r.name}</div>
+                                    <div>${escapeHtml(r.name)}</div>
                                     <span class="badge badge-level">L${r.level}</span>
                                 </th>
                             `).join('')}
@@ -1522,14 +1653,18 @@
                 html += `
                     <tr>
                         <td class="col-perm-desc">
-                            <div style="font-weight: 600;">${p.name}</div>
+                            <div style="font-weight: 600;">${escapeHtml(p.name)}</div>
                             <div class="mono" style="font-size: 11px; color: var(--text-muted);">${p.key}</div>
                         </td>
                         ${roles.map(r => {
                             const has = map.has(`${r.key}:${p.key}`);
-                            return has 
-                                ? `<td class="matrix-cell-yes" title="${r.name} holds ${p.key}">✓</td>`
-                                : `<td class="matrix-cell-no">-</td>`;
+                            return `
+                                <td class="${has ? 'matrix-cell-yes clickable' : 'matrix-cell-no clickable'}" 
+                                    title="Click to ${has ? 'REVOKE' : 'GRANT'} ${p.key} for ${r.name}"
+                                    onclick="toggleRolePermission('${r.key}', '${p.key}', ${!has})">
+                                    ${has ? '✓' : '-'}
+                                </td>
+                            `;
                         }).join('')}
                     </tr>
                 `;
@@ -1544,13 +1679,21 @@
             const tbody = document.querySelector('#table-orgs tbody');
             tbody.innerHTML = state.organisations.map(o => `
                 <tr>
-                    <td style="font-weight: 600;">${o.name}</td>
+                    <td style="font-weight: 600;">${escapeHtml(o.name)}</td>
                     <td><span class="badge badge-${o.portal}">${o.portal.toUpperCase()}</span></td>
                     <td><code>${o.tenant_type_key || 'SYSTEM_ROOT'}</code></td>
                     <td><span class="badge badge-${o.status.toLowerCase()}">${o.status}</span></td>
                     <td><strong>${o.member_count}</strong> members</td>
                     <td><strong>${o.workspace_count}</strong> workspaces</td>
                     <td class="mono" style="font-size: 11px; color: var(--text-muted);">${new Date(o.created_at).toLocaleDateString()}</td>
+                    <td>
+                        ${o.portal === 'platform' ? '<span style="color: var(--text-muted); font-size: 11px; font-weight: 600;">Root Platform</span>' : `
+                            <button class="btn btn-outline btn-sm" onclick="toggleOrgStatus('${o.id}', '${o.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE'}')" style="margin-right: 4px; padding: 2px 8px;">
+                                ${o.status === 'ACTIVE' ? 'Suspend' : 'Activate'}
+                            </button>
+                            <button class="btn-action-danger" onclick="deleteOrg('${o.id}', '${escapeHtml(o.name)}')">Delete</button>
+                        `}
+                    </td>
                 </tr>
             `).join('');
         }
@@ -1561,14 +1704,17 @@
             tbody.innerHTML = state.memberships.map(m => `
                 <tr>
                     <td class="mono">${m.user_code}</td>
-                    <td style="font-weight: 600;">${m.email}</td>
-                    <td>${m.org_name}</td>
+                    <td style="font-weight: 600;">${escapeHtml(m.email)}</td>
+                    <td>${escapeHtml(m.org_name)}</td>
                     <td><span class="badge badge-platform">${m.role_name}</span></td>
                     <td><span class="badge badge-level">Level ${m.level}</span></td>
                     <td><span class="badge badge-${m.status.toLowerCase()}">${m.status}</span></td>
                     <td><span class="mono" style="font-size: 11px;">${m.min_aal.toUpperCase()}</span></td>
                     <td class="mono" style="font-size: 11px; color: ${m.expires_at ? 'var(--accent-amber)' : 'var(--text-muted)'};">
                         ${m.expires_at ? new Date(m.expires_at).toLocaleDateString() : 'Permanent'}
+                    </td>
+                    <td>
+                        <button class="btn-action-danger" onclick="deleteMember('${m.id}', '${escapeHtml(m.email)}')">Revoke / Delete</button>
                     </td>
                 </tr>
             `).join('');
@@ -1688,6 +1834,189 @@
                 event.currentTarget.innerHTML = originalText;
                 event.currentTarget.disabled = false;
             }
+        }
+
+        // 9. Real-Time CRUD Action Handlers
+        async function handleCreateOrg(e) {
+            e.preventDefault();
+            const name = document.getElementById('new-org-name').value;
+            const tenantTypeKey = document.getElementById('new-org-type').value;
+            const portal = document.getElementById('new-org-portal').value;
+            const status = document.getElementById('new-org-status').value;
+
+            try {
+                const res = await fetch('/api/organisations/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, tenantTypeKey, portal, status })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                document.getElementById('new-org-name').value = '';
+                await loadAllData();
+                alert(`Organisation '${name}' successfully created in PostgreSQL!`);
+            } catch (err) {
+                alert('Failed to create organisation: ' + err.message);
+            }
+        }
+
+        async function toggleOrgStatus(organisationId, newStatus) {
+            try {
+                const res = await fetch('/api/organisations/status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ organisationId, status: newStatus })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                await loadAllData();
+            } catch (err) {
+                alert('Failed to update status: ' + err.message);
+            }
+        }
+
+        async function deleteOrg(organisationId, name) {
+            if (!confirm(`Permanently delete organisation '${name}' and its workspaces from PostgreSQL?`)) return;
+            try {
+                const res = await fetch('/api/organisations/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ organisationId })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                await loadAllData();
+            } catch (err) {
+                alert('Delete failed: ' + err.message);
+            }
+        }
+
+        async function handleCreateMember(e) {
+            e.preventDefault();
+            const email = document.getElementById('new-mem-email').value;
+            const organisationId = document.getElementById('new-mem-org').value;
+            const roleKey = document.getElementById('new-mem-role').value;
+            const durationDays = document.getElementById('new-mem-days').value;
+
+            try {
+                const res = await fetch('/api/users/create-with-membership', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, organisationId, roleKey, durationDays })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                document.getElementById('new-mem-email').value = '';
+                await loadAllData();
+                alert(`Member '${email}' assigned role '${roleKey}' in PostgreSQL!`);
+            } catch (err) {
+                alert('Failed to add member (Invariant Trigger): ' + err.message);
+            }
+        }
+
+        async function deleteMember(membershipId, email) {
+            if (!confirm(`Revoke membership for '${email}'?`)) return;
+            try {
+                const res = await fetch('/api/memberships/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ membershipId })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                await loadAllData();
+            } catch (err) {
+                alert('Failed to delete membership (Custodian Invariant): ' + err.message);
+            }
+        }
+
+        async function toggleRolePermission(roleKey, permissionKey, grant) {
+            try {
+                const res = await fetch('/api/role-permissions/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ roleKey, permissionKey, grant })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                await loadAllData();
+            } catch (err) {
+                alert('Permission toggle failed: ' + err.message);
+            }
+        }
+
+        async function quickCreateDemoOrg() {
+            try {
+                const timestamp = Date.now().toString().slice(-4);
+                const orgName = `Apex Studio ${timestamp}`;
+                const orgRes = await fetch('/api/organisations/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: orgName, tenantTypeKey: 'studio_owner', portal: 'subscriber', status: 'ACTIVE' })
+                });
+                const orgData = await orgRes.json();
+                if (!orgRes.ok) throw new Error(orgData.error);
+
+                const email = `architect-${timestamp}@apexstudio.local`;
+                const memRes = await fetch('/api/users/create-with-membership', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, organisationId: orgData.organisation.id, roleKey: 'business_owner' })
+                });
+                const memData = await memRes.json();
+                if (!memRes.ok) throw new Error(memData.error);
+
+                await loadAllData();
+
+                // Select newly created user and org in simulator
+                const userSelect = document.getElementById('sim-user');
+                if (userSelect && memData.membership) {
+                    userSelect.value = memData.membership.user_id;
+                    onUserSelectChange();
+                }
+                alert(`✓ Live test organisation '${orgName}' and owner '${email}' created directly in PostgreSQL!\n\nThey are now selected in the simulator. You can evaluate authorization policies immediately.`);
+            } catch (err) {
+                alert('Quick setup error: ' + err.message);
+            }
+        }
+
+        async function quickCleanTestOrgs() {
+            const subscriberOrgs = state.organisations.filter(o => o.portal === 'subscriber');
+            if (subscriberOrgs.length === 0) {
+                alert('No subscriber test organisations found.');
+                return;
+            }
+            if (!confirm(`Delete all ${subscriberOrgs.length} subscriber test organisation(s) and return to pristine platform state?`)) return;
+
+            for (const org of subscriberOrgs) {
+                await fetch('/api/organisations/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ organisationId: org.id })
+                });
+            }
+            await loadAllData();
+            alert('✓ All subscriber test organisations removed from PostgreSQL.');
+        }
+
+        function populateMemberFormDropdowns() {
+            const orgSelect = document.getElementById('new-mem-org');
+            const roleSelect = document.getElementById('new-mem-role');
+            if (orgSelect && state.organisations) {
+                orgSelect.innerHTML = state.organisations.map(o => `
+                    <option value="${o.id}">${escapeHtml(o.name)} (${o.portal.toUpperCase()})</option>
+                `).join('');
+            }
+            if (roleSelect && state.roles) {
+                roleSelect.innerHTML = state.roles.map(r => `
+                    <option value="${r.key}">${escapeHtml(r.name)} (${r.portal.toUpperCase()} - Level ${r.level})</option>
+                `).join('');
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
         // Initial Boot
