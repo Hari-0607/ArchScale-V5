@@ -61,7 +61,8 @@ async function main() {
         '006_share_grants_and_security_controls.sql',
         '007_append_only_audit_log.sql',
         '008_database_invariants_and_functions.sql',
-        '009_least_privilege_runtime_role.sql'
+        '009_least_privilege_runtime_role.sql',
+        '010_supabase_staging_compatibility.sql'
     ];
 
     console.log('\n[2/3] Executing migrations 001-009 sequentially...\n');
