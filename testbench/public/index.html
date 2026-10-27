@@ -1327,20 +1327,52 @@
         // 1. SIMULATOR
         function renderSimulatorDropdowns() {
             const userSelect = document.getElementById('sim-user');
+        function populateSimSelectors() {
+            const userSelect = document.getElementById('sim-user');
             const orgSelect = document.getElementById('sim-org');
             const permSelect = document.getElementById('sim-perm');
+            const presetContainer = document.getElementById('preset-container');
 
-            userSelect.innerHTML = state.memberships.map(m => `
-                <option value="${m.user_id}" data-org="${m.org_id}">
-                    ${m.email} (${m.role_name} - L${m.level}) [${m.org_name}]
-                </option>
-            `).join('');
+            if (!state.memberships || state.memberships.length === 0) {
+                userSelect.innerHTML = `<option value="" disabled selected>No users in DB (Seed 001 contains schema, roles & root org only)</option>`;
+                if (presetContainer) {
+                    presetContainer.innerHTML = `
+                        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.5; padding: 4px 0;">
+                            Live PostgreSQL has 0 user memberships (Seed 001 provides schema, roles, and platform org only).
+                            To test live invariant enforcement, use the 
+                            <a href="http://127.0.0.1:3001" target="_blank" style="color: var(--accent-primary); text-decoration: underline;">Phase 1 Live Proof Harness (Port 3001)</a>.
+                        </div>
+                    `;
+                }
+            } else {
+                userSelect.innerHTML = state.memberships.map(m => `
+                    <option value="${m.user_id}" data-org="${m.org_id}">
+                        ${m.email} (${m.role_name} - L${m.level}) [${m.org_name}]
+                    </option>
+                `).join('');
 
-            orgSelect.innerHTML = state.organisations.map(o => `
-                <option value="${o.id}">
-                    ${o.name} (${o.portal.toUpperCase()}) - Status: ${o.status}
-                </option>
-            `).join('');
+                if (presetContainer) {
+                    presetContainer.innerHTML = `
+                        <div class="preset-label">Live User Quick-Select</div>
+                        ${state.memberships.slice(0, 4).map(m => `
+                            <button class="preset-chip" onclick="selectLiveUser('${m.user_id}', '${m.org_id}')">
+                                <span class="preset-tag allow">${m.role_name}</span>
+                                <strong>${m.email}</strong> &rarr; ${m.org_name}
+                            </button>
+                        `).join('')}
+                    `;
+                }
+            }
+
+            if (!state.organisations || state.organisations.length === 0) {
+                orgSelect.innerHTML = `<option value="" disabled selected>No organisations found</option>`;
+            } else {
+                orgSelect.innerHTML = state.organisations.map(o => `
+                    <option value="${o.id}">
+                        ${o.name} (${o.portal.toUpperCase()}) - Status: ${o.status}
+                    </option>
+                `).join('');
+            }
 
             // Group permissions by module
             const modules = {};
@@ -1364,113 +1396,11 @@
             onUserSelectChange();
         }
 
-        function onUserSelectChange() {
+        function selectLiveUser(userId, orgId) {
             const userSelect = document.getElementById('sim-user');
-            const selectedOption = userSelect.options[userSelect.selectedIndex];
-            if (selectedOption) {
-                const orgId = selectedOption.getAttribute('data-org');
-                if (orgId) {
-                    document.getElementById('sim-org').value = orgId;
-                }
-            }
-        }
-
-        function onOrgSelectChange() {
-            // Keep as is
-        }
-
-        async function evaluateDecision() {
-            const userId = document.getElementById('sim-user').value;
-            const organisationId = document.getElementById('sim-org').value;
-            const permissionKey = document.getElementById('sim-perm').value;
-
-            try {
-                const res = await fetch('/api/evaluate-policy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId, organisationId, permissionKey })
-                });
-
-                const data = await res.json();
-                renderDecisionResult(data);
-            } catch (err) {
-                alert('Evaluation failed: ' + err.message);
-            }
-        }
-
-        function renderDecisionResult(data) {
-            const box = document.getElementById('decision-box');
-            const pill = document.getElementById('decision-pill');
-            const code = document.getElementById('decision-code');
-            const summary = document.getElementById('decision-summary');
-            const metaActor = document.getElementById('meta-actor');
-            const metaRole = document.getElementById('meta-role');
-            const metaOrg = document.getElementById('meta-org');
-            const metaPerm = document.getElementById('meta-perm');
-            const pipeline = document.getElementById('rules-pipeline');
-            const timestamp = document.getElementById('decision-timestamp');
-
-            timestamp.textContent = new Date().toLocaleTimeString();
-
-            const isAllow = data.decision === 'ALLOW';
-            box.className = 'decision-box ' + (isAllow ? 'allow' : 'deny');
-            pill.className = 'decision-pill ' + (isAllow ? 'allow' : 'deny');
-            pill.innerHTML = isAllow ? '✓ ALLOW (AUTHORISED)' : '✕ DENY (ACCESS BLOCKED)';
-            code.textContent = 'RULE_VERDICT_' + data.decision;
-            summary.textContent = data.summary;
-
-            if (data.actor) {
-                metaActor.textContent = data.actor.email;
-                metaRole.textContent = `${data.actor.role} (Level ${data.actor.level})`;
-                metaOrg.textContent = `${data.actor.orgName} (${data.actor.portal.toUpperCase()})`;
-                metaPerm.textContent = `${data.permission.name} [${data.permission.key}]`;
-            }
-
-            if (data.ruleChecks && data.ruleChecks.length) {
-                pipeline.innerHTML = data.ruleChecks.map(c => `
-                    <div class="rule-step ${c.pass ? 'pass' : 'fail'}">
-                        <span class="rule-icon ${c.pass ? 'pass' : 'fail'}">${c.pass ? '✓' : '✕'}</span>
-                        <div>
-                            <div class="rule-title">${c.name}</div>
-                            <div class="rule-detail">${c.detail}</div>
-                        </div>
-                    </div>
-                `).join('');
-            }
-        }
-
-        function applyPreset(preset) {
-            const userSelect = document.getElementById('sim-user');
-            const permSelect = document.getElementById('sim-perm');
-
-            if (preset === 'elena_write') {
-                const elena = state.memberships.find(m => m.email.includes('elena'));
-                if (elena) userSelect.value = elena.user_id;
-                onUserSelectChange();
-                permSelect.value = 'project.records.write';
-            } else if (preset === 'intern_delete') {
-                const alex = state.memberships.find(m => m.email.includes('alex'));
-                if (alex) userSelect.value = alex.user_id;
-                onUserSelectChange();
-                permSelect.value = 'project.records.delete';
-            } else if (preset === 'intern_read') {
-                const alex = state.memberships.find(m => m.email.includes('alex'));
-                if (alex) userSelect.value = alex.user_id;
-                onUserSelectChange();
-                permSelect.value = 'project.records.read';
-            } else if (preset === 'owner_approve_org') {
-                const marcus = state.memberships.find(m => m.email.includes('marcus'));
-                if (marcus) userSelect.value = marcus.user_id;
-                onUserSelectChange();
-                permSelect.value = 'platform.organisations.approve';
-            } else if (preset === 'founder_approve_org') {
-                const founder = state.memberships.find(m => m.role_key === 'founder');
-                if (founder) userSelect.value = founder.user_id;
-                onUserSelectChange();
-                permSelect.value = 'platform.organisations.approve';
-            }
-
-            evaluateDecision();
+            const orgSelect = document.getElementById('sim-org');
+            if (userSelect && userId) userSelect.value = userId;
+            if (orgSelect && orgId) orgSelect.value = orgId;
         }
 
         // 2. ROLE-PERMISSION MATRIX
