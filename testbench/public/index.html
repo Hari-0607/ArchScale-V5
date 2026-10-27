@@ -3,24 +3,40 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ArchScale V05 | Auth Layer Testbench</title>
+    <title>ArchScale V05 | Authorisation & Identity Governance Console</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-base: #090D16;
-            --bg-surface: #111827;
-            --bg-card: #182234;
-            --bg-input: #0F172A;
-            --border-color: #273549;
-            --text-main: #F3F4F6;
-            --text-muted: #94A3B8;
-            --accent-cyan: #06B6D4;
+            --bg-primary: #07090E;
+            --bg-secondary: #0D131F;
+            --bg-card: #121A2B;
+            --bg-card-hover: #18233A;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(99, 102, 241, 0.3);
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --accent-indigo: #6366F1;
+            --accent-indigo-light: #818CF8;
             --accent-blue: #3B82F6;
-            --accent-green: #10B981;
+            --accent-emerald: #10B981;
+            --accent-emerald-bg: rgba(16, 185, 129, 0.12);
+            --accent-ruby: #EF4444;
+            --accent-ruby-bg: rgba(239, 68, 68, 0.12);
             --accent-amber: #F59E0B;
-            --accent-rose: #F43F5E;
+            --accent-amber-bg: rgba(245, 158, 11, 0.12);
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+            --shadow-sm: 0 2px 4px rgba(0,0,0,0.3);
+            --shadow-lg: 0 10px 25px -5px rgba(0,0,0,0.5), 0 8px 10px -6px rgba(0,0,0,0.5);
+            --glow-indigo: 0 0 20px rgba(99, 102, 241, 0.25);
+            --glow-emerald: 0 0 20px rgba(16, 185, 129, 0.25);
+            --glow-ruby: 0 0 20px rgba(239, 68, 68, 0.25);
         }
 
         * {
@@ -30,577 +46,1604 @@
         }
 
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background-color: var(--bg-base);
-            color: var(--text-main);
-            min-height: 100vh;
-            padding: 24px;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: 14px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            overflow-x: hidden;
         }
 
-        .container {
-            max-width: 1380px;
-            margin: 0 auto;
-        }
-
-        /* Header */
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 20px 24px;
-            background: linear-gradient(135deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.8));
+        /* Top Bar */
+        .topbar {
+            background: rgba(13, 19, 31, 0.85);
             backdrop-filter: blur(12px);
-            border: 1px solid var(--border-color);
-            border-radius: 16px;
-            margin-bottom: 24px;
+            border-bottom: 1px solid var(--border-color);
+            padding: 14px 28px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .brand-container {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .brand-logo {
+            width: 34px;
+            height: 34px;
+            background: linear-gradient(135deg, #6366F1, #3B82F6);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 16px;
+            color: #fff;
+            box-shadow: var(--glow-indigo);
         }
 
         .brand-title {
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .brand-tag {
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            color: var(--accent-indigo-light);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .brand-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .topbar-actions {
             display: flex;
             align-items: center;
             gap: 12px;
         }
 
-        .brand-title h1 {
-            font-size: 22px;
-            font-weight: 800;
-            letter-spacing: -0.5px;
-            background: linear-gradient(90deg, #38BDF8, #818CF8);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .tag {
-            font-size: 11px;
-            font-weight: 700;
-            padding: 4px 10px;
-            border-radius: 999px;
-            background: rgba(6, 182, 212, 0.15);
-            color: var(--accent-cyan);
-            border: 1px solid rgba(6, 182, 212, 0.3);
-            text-transform: uppercase;
-        }
-
-        .db-badge {
+        .engine-pill {
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 13px;
-            color: var(--accent-green);
-            background: rgba(16, 185, 129, 0.1);
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
             padding: 6px 14px;
-            border-radius: 8px;
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            font-family: 'JetBrains Mono', monospace;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
         }
 
-        .pulse-dot {
+        .status-dot {
             width: 8px;
             height: 8px;
-            background-color: var(--accent-green);
             border-radius: 50%;
-            box-shadow: 0 0 8px var(--accent-green);
+            background: var(--accent-emerald);
+            box-shadow: 0 0 8px var(--accent-emerald);
             animation: pulse 2s infinite;
         }
 
         @keyframes pulse {
-            0% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.4; transform: scale(0.9); }
-            100% { opacity: 1; transform: scale(1); }
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.9); }
         }
 
-        /* Stats Grid */
-        .stats-grid {
+        .btn {
+            font-family: var(--font-sans);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-indigo), var(--accent-blue));
+            color: white;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn-primary:hover {
+            opacity: 0.92;
+            transform: translateY(-1px);
+            box-shadow: var(--glow-indigo);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        .btn-outline:hover {
+            background: var(--bg-card);
+            border-color: var(--border-hover);
+            color: var(--text-primary);
+        }
+
+        /* Container */
+        .app-container {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 24px 28px 60px 28px;
+        }
+
+        /* KPI Banner */
+        .kpi-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 14px;
             margin-bottom: 24px;
         }
 
-        .stat-card {
-            background: var(--bg-surface);
+        .kpi-card {
+            background: var(--bg-card);
             border: 1px solid var(--border-color);
-            padding: 18px 20px;
-            border-radius: 12px;
+            border-radius: var(--radius-md);
+            padding: 16px;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .kpi-card:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+        }
+
+        .kpi-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+
+        .kpi-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text-primary);
+            font-feature-settings: "tnum";
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+        }
+
+        .kpi-sub {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Tabs Navigation */
+        .tabs-nav {
+            display: flex;
+            gap: 6px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 24px;
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            padding: 12px 18px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            font-family: var(--font-sans);
+            cursor: pointer;
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: color 0.2s;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .tab-btn.active {
+            color: var(--text-primary);
+        }
+
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--accent-indigo);
+            box-shadow: 0 0 10px var(--accent-indigo);
+        }
+
+        .tab-badge {
+            background: rgba(255, 255, 255, 0.08);
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        /* Tab Content */
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
+            animation: fadeIn 0.25s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* SIMULATOR STYLES */
+        .simulator-layout {
+            display: grid;
+            grid-template-columns: 460px 1fr;
+            gap: 24px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .card-header {
+            padding: 18px 22px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.015);
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .card-body {
+            padding: 22px;
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .form-select, .form-input {
+            width: 100%;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: 13px;
+            padding: 10px 14px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            outline: none;
+        }
+
+        .form-select:focus, .form-input:focus {
+            border-color: var(--accent-indigo);
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+        }
+
+        .preset-scenarios {
+            margin-top: 20px;
+            padding-top: 18px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .preset-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 8px;
+        }
+
+        .preset-chip {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 7px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            margin-bottom: 8px;
+            display: block;
+            width: 100%;
+            text-align: left;
+            transition: all 0.2s;
+        }
+
+        .preset-chip:hover {
+            border-color: var(--accent-indigo);
+            color: var(--text-primary);
+            background: rgba(99, 102, 241, 0.08);
+            transform: translateX(2px);
+        }
+
+        .preset-tag {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-right: 6px;
+        }
+
+        .preset-tag.allow {
+            background: var(--accent-emerald-bg);
+            color: var(--accent-emerald);
+        }
+
+        .preset-tag.deny {
+            background: var(--accent-ruby-bg);
+            color: var(--accent-ruby);
+        }
+
+        /* DECISION RESULT BOX */
+        .decision-box {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 24px;
             position: relative;
             overflow: hidden;
         }
 
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
+        .decision-box.allow {
+            border-color: rgba(16, 185, 129, 0.4);
+            box-shadow: var(--glow-emerald);
         }
 
-        .stat-label {
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
+        .decision-box.deny {
+            border-color: rgba(239, 68, 68, 0.4);
+            box-shadow: var(--glow-ruby);
         }
 
-        .stat-value {
-            font-size: 28px;
-            font-weight: 800;
-            color: var(--text-main);
-            font-family: 'JetBrains Mono', monospace;
-        }
-
-        /* Layout Columns */
-        .main-grid {
-            display: grid;
-            grid-template-columns: 1.1fr 0.9fr;
-            gap: 24px;
-            margin-bottom: 24px;
-        }
-
-        @media (max-width: 1024px) {
-            .main-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .panel {
-            background: var(--bg-surface);
-            border: 1px solid var(--border-color);
-            border-radius: 16px;
-            padding: 24px;
-        }
-
-        .panel-header {
+        .decision-banner {
             display: flex;
+            align-items: center;
             justify-content: space-between;
+            margin-bottom: 18px;
+        }
+
+        .decision-pill {
+            font-size: 14px;
+            font-weight: 800;
+            padding: 6px 16px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            display: inline-flex;
             align-items: center;
-            margin-bottom: 20px;
+            gap: 8px;
         }
 
-        .panel-title {
-            font-size: 16px;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
+        .decision-pill.allow {
+            background: var(--accent-emerald);
+            color: #052e16;
         }
 
-        /* Attack Buttons */
-        .attack-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-            gap: 12px;
-            margin-bottom: 20px;
+        .decision-pill.deny {
+            background: var(--accent-ruby);
+            color: #450a0a;
         }
 
-        .btn-attack {
-            background: rgba(244, 63, 94, 0.08);
-            border: 1px solid rgba(244, 63, 94, 0.25);
-            color: #FDA4AF;
-            padding: 12px 16px;
-            border-radius: 10px;
-            font-size: 13px;
+        .decision-summary {
+            font-size: 15px;
             font-weight: 600;
-            cursor: pointer;
-            text-align: left;
-            transition: all 0.2s;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            margin-bottom: 20px;
         }
 
-        .btn-attack:hover {
-            background: rgba(244, 63, 94, 0.18);
-            border-color: rgba(244, 63, 94, 0.5);
-            transform: translateY(-1px);
-        }
-
-        .btn-attack small {
-            font-size: 11px;
-            color: #94A3B8;
-            font-weight: 400;
-        }
-
-        /* Live Terminal */
-        .terminal-box {
-            background: #050811;
-            border: 1px solid #1E293B;
-            border-radius: 10px;
+        .actor-resource-meta {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+            background: var(--bg-primary);
             padding: 16px;
-            font-family: 'JetBrains Mono', monospace;
+            border-radius: var(--radius-md);
+            margin-bottom: 22px;
+            border: 1px solid var(--border-color);
+        }
+
+        .meta-item {
             font-size: 12px;
-            min-height: 180px;
-            max-height: 240px;
-            overflow-y: auto;
-            color: #A5F3FC;
-            line-height: 1.6;
         }
 
-        .terminal-line {
-            margin-bottom: 6px;
+        .meta-label {
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 2px;
         }
 
-        .terminal-line.error {
-            color: #FB7185;
+        .meta-val {
+            font-weight: 600;
+            color: var(--text-primary);
         }
 
-        .terminal-line.success {
-            color: #34D399;
+        .rules-pipeline {
+            margin-top: 14px;
         }
 
-        .terminal-line.info {
-            color: #94A3B8;
+        .rule-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            font-size: 12px;
         }
 
-        /* Tables */
+        .rule-step.pass {
+            border-left: 3px solid var(--accent-emerald);
+        }
+
+        .rule-step.fail {
+            border-left: 3px solid var(--accent-ruby);
+            background: rgba(239, 68, 68, 0.04);
+        }
+
+        .rule-icon {
+            font-weight: 700;
+            font-size: 13px;
+        }
+
+        .rule-icon.pass { color: var(--accent-emerald); }
+        .rule-icon.fail { color: var(--accent-ruby); }
+
+        .rule-title {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .rule-detail {
+            color: var(--text-secondary);
+            font-size: 11px;
+            margin-top: 2px;
+        }
+
+        /* TABLES & MATRICES */
         .table-responsive {
             overflow-x: auto;
         }
 
-        table {
+        .data-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 13px;
-        }
-
-        th {
             text-align: left;
-            padding: 12px;
+        }
+
+        .data-table th {
+            background: var(--bg-secondary);
             color: var(--text-muted);
-            border-bottom: 1px solid var(--border-color);
-            font-weight: 600;
-            text-transform: uppercase;
             font-size: 11px;
-            letter-spacing: 0.5px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
         }
 
-        td {
-            padding: 12px;
-            border-bottom: 1px solid rgba(39, 53, 73, 0.4);
-            color: var(--text-main);
+        .data-table td {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
         }
 
-        tr:last-child td {
-            border-bottom: none;
+        .data-table tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
         }
 
         .badge {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 4px;
+            letter-spacing: 0.02em;
+        }
+
+        .badge-active { background: var(--accent-emerald-bg); color: var(--accent-emerald); }
+        .badge-applied { background: var(--accent-amber-bg); color: var(--accent-amber); }
+        .badge-suspended { background: var(--accent-ruby-bg); color: var(--accent-ruby); }
+        .badge-platform { background: rgba(99, 102, 241, 0.15); color: var(--accent-indigo-light); border: 1px solid rgba(99, 102, 241, 0.3); }
+        .badge-subscriber { background: rgba(59, 130, 246, 0.15); color: #93C5FD; border: 1px solid rgba(59, 130, 246, 0.3); }
+        .badge-level { background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); font-family: var(--font-mono); }
+
+        .mono {
+            font-family: var(--font-mono);
+            font-size: 12px;
+        }
+
+        /* MATRIX GRID */
+        .matrix-container {
+            overflow-x: auto;
+            max-height: 650px;
+        }
+
+        .matrix-table {
+            border-collapse: separate;
+            border-spacing: 0;
+            width: 100%;
+            font-size: 12px;
+        }
+
+        .matrix-table th, .matrix-table td {
+            padding: 10px 14px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+        }
+
+        .matrix-table th.col-role {
+            background: var(--bg-secondary);
             font-size: 11px;
             font-weight: 700;
-            padding: 3px 8px;
-            border-radius: 6px;
-            text-transform: uppercase;
+            position: sticky;
+            top: 0;
+            z-index: 2;
         }
 
-        .badge-active { background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.3); }
-        .badge-applied { background: rgba(245, 158, 11, 0.15); color: #FBBF24; border: 1px solid rgba(245, 158, 11, 0.3); }
-        .badge-suspended { background: rgba(244, 63, 94, 0.15); color: #FB7185; border: 1px solid rgba(244, 63, 94, 0.3); }
-
-        .btn-action {
-            background: linear-gradient(135deg, #0EA5E9, #6366F1);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 13px;
+        .matrix-table th.col-perm {
+            background: var(--bg-secondary);
+            font-size: 12px;
             font-weight: 600;
-            cursor: pointer;
-            transition: opacity 0.2s;
+            text-align: left;
+            position: sticky;
+            left: 0;
+            z-index: 3;
+            min-width: 260px;
         }
 
-        .btn-action:hover {
-            opacity: 0.9;
+        .matrix-table td.col-perm-desc {
+            text-align: left;
+            position: sticky;
+            left: 0;
+            background: var(--bg-card);
+            z-index: 1;
+            font-weight: 500;
+        }
+
+        .matrix-cell-yes {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-emerald);
+            font-weight: 800;
+        }
+
+        .matrix-cell-no {
+            color: var(--text-muted);
+            opacity: 0.3;
+        }
+
+        /* INVARIANTS GRID */
+        .invariants-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 18px;
+        }
+
+        .invariant-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .inv-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .inv-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .inv-enforcement {
+            font-size: 11px;
+            color: var(--accent-indigo-light);
+            background: rgba(99, 102, 241, 0.15);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-weight: 600;
+        }
+
+        .inv-desc {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 14px;
+            line-height: 1.5;
+        }
+
+        .inv-result {
+            margin-top: 12px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            display: none;
+        }
+
+        .inv-result.show {
+            display: block;
+            animation: fadeIn 0.2s;
+        }
+
+        .inv-result.success {
+            background: var(--accent-emerald-bg);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #A7F3D0;
+        }
+
+        .inv-result.fail {
+            background: var(--accent-ruby-bg);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #FECACA;
+        }
+
+        /* SEAT GAUGES */
+        .seat-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 18px;
+        }
+
+        .seat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+        }
+
+        .seat-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+
+        .seat-app-title {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .seat-bar-bg {
+            background: var(--bg-secondary);
+            height: 10px;
+            border-radius: 5px;
+            overflow: hidden;
+            margin: 12px 0 6px 0;
+            border: 1px solid var(--border-color);
+        }
+
+        .seat-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-indigo), var(--accent-blue));
+            border-radius: 5px;
+            transition: width 0.5s ease;
+        }
+
+        .seat-bar-fill.warning {
+            background: linear-gradient(90deg, var(--accent-amber), var(--accent-ruby));
+        }
+
+        /* AUDIT LOGS */
+        .audit-diff {
+            background: var(--bg-primary);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            max-width: 320px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* SPINNER */
+        .spinner {
+            border: 2px solid rgba(255,255,255,0.1);
+            border-left-color: var(--accent-indigo);
+            border-radius: 50%;
+            width: 14px;
+            height: 14px;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- Header -->
-        <header>
-            <div class="brand-title">
-                <h1>ArchScale V05</h1>
-                <span class="tag">Auth Layer Phase 1</span>
-            </div>
-            <div class="db-badge">
-                <div class="pulse-dot"></div>
-                <span>PostgreSQL 18.3 Live (Port 5433)</span>
-            </div>
-        </header>
 
-        <!-- Stats Grid -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">Organisations</div>
-                <div class="stat-value" id="stat-orgs">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Active Memberships</div>
-                <div class="stat-value" id="stat-members">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">App Seats (Allocated / Limit)</div>
-                <div class="stat-value" id="stat-seats">- / -</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Immutable Audit Records</div>
-                <div class="stat-value" id="stat-audit">-</div>
+    <!-- TOP NAVIGATION -->
+    <header class="topbar">
+        <div class="brand-container">
+            <div class="brand-logo">A5</div>
+            <div>
+                <div class="brand-title">
+                    ArchScale V05 Authorisation Layer
+                    <span class="brand-tag">Governance Console</span>
+                </div>
+                <div class="brand-subtitle">Multi-Tenant Organisation-First RBAC, ABAC & Context Policy Engine</div>
             </div>
         </div>
+        <div class="topbar-actions">
+            <div class="engine-pill">
+                <span class="status-dot"></span>
+                <span>PostgreSQL 18.3 Engine Live (Port 5433)</span>
+            </div>
+            <button class="btn btn-outline" onclick="loadAllData()">
+                <span>↻ Refresh Data</span>
+            </button>
+            <button class="btn btn-primary" onclick="runVitestModal()">
+                <span>▶ Run 30 Verification Tests</span>
+            </button>
+        </div>
+    </header>
 
-        <!-- Main Workspace -->
-        <div class="main-grid">
-            <!-- Left: Attack Invariant Sandbox -->
-            <div class="panel">
-                <div class="panel-header">
-                    <div class="panel-title">
-                        <span>🛡️ Invariant Sandbox & Attack Defense Simulator</span>
+    <div class="app-container">
+
+        <!-- KPI SUMMARY BAR -->
+        <section class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-label">Organisations</div>
+                <div class="kpi-value" id="kpi-orgs">-</div>
+                <div class="kpi-sub">Platform & Studio Tenants</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Active Memberships</div>
+                <div class="kpi-value" id="kpi-members">-</div>
+                <div class="kpi-sub">Role bindings attached</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Role Hierarchy</div>
+                <div class="kpi-value" id="kpi-roles">11</div>
+                <div class="kpi-sub">Level 5 to Level 100</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Granular Permissions</div>
+                <div class="kpi-value" id="kpi-perms">22</div>
+                <div class="kpi-sub">Platform, Org, Project modules</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">App Seat Quotas</div>
+                <div class="kpi-value" id="kpi-seats">- / -</div>
+                <div class="kpi-sub">Allocated vs purchased</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Audit Ledger</div>
+                <div class="kpi-value" id="kpi-audit">-</div>
+                <div class="kpi-sub">Append-only immutable</div>
+            </div>
+        </section>
+
+        <!-- NAVIGATION TABS -->
+        <nav class="tabs-nav">
+            <button class="tab-btn active" onclick="switchTab('tab-simulator')">
+                <span>⚡ Live Policy Decision Simulator</span>
+                <span class="tab-badge">Interactive</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('tab-matrix')">
+                <span>🛡️ Role-Permission Matrix</span>
+                <span class="tab-badge">11 Roles</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('tab-orgs')">
+                <span>🏢 Organisations & Workspaces</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('tab-members')">
+                <span>👥 Memberships & Sessions</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('tab-seats')">
+                <span>🎟️ Seat Allocations & Quotas</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('tab-invariants')">
+                <span>🔒 Database Invariants (8 Rules)</span>
+                <span class="tab-badge">Zero-Trust</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('tab-audit')">
+                <span>📜 Immutable Audit Ledger</span>
+            </button>
+        </nav>
+
+        <!-- TAB 1: POLICY DECISION SIMULATOR -->
+        <div id="tab-simulator" class="tab-panel active">
+            <div class="simulator-layout">
+                <!-- Control Panel -->
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Policy Evaluator Sandbox</div>
+                            <div class="card-subtitle">Test real-time authorization against database policies</div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label class="form-label">1. Select Actor (Identity)</label>
+                            <select id="sim-user" class="form-select" onchange="onUserSelectChange()">
+                                <!-- Dynamically populated -->
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">2. Target Organisation Realm</label>
+                            <select id="sim-org" class="form-select" onchange="onOrgSelectChange()">
+                                <!-- Dynamically populated -->
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">3. Target Action / Permission</label>
+                            <select id="sim-perm" class="form-select">
+                                <!-- Dynamically populated -->
+                            </select>
+                        </div>
+
+                        <button class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 13px;" onclick="evaluateDecision()">
+                            <span>⚡ Evaluate Authorisation Decision</span>
+                        </button>
+
+                        <!-- Presets for Executive Demo -->
+                        <div class="preset-scenarios">
+                            <div class="preset-label">Executive Demonstration Scenarios</div>
+                            <button class="preset-chip" onclick="applyPreset('elena_write')">
+                                <span class="preset-tag allow">ALLOW</span>
+                                <strong>Elena (Leader)</strong> &rarr; Write Project Records in Skyline Tower
+                            </button>
+                            <button class="preset-chip" onclick="applyPreset('intern_delete')">
+                                <span class="preset-tag deny">DENY</span>
+                                <strong>Alex (Intern)</strong> &rarr; Delete Project Records (Role Lacks Permission)
+                            </button>
+                            <button class="preset-chip" onclick="applyPreset('intern_read')">
+                                <span class="preset-tag allow">ALLOW</span>
+                                <strong>Alex (Intern)</strong> &rarr; Read Project Records (Within 90-day timebound expiry)
+                            </button>
+                            <button class="preset-chip" onclick="applyPreset('owner_approve_org')">
+                                <span class="preset-tag deny">DENY</span>
+                                <strong>Marcus (Studio Owner)</strong> &rarr; Approve Platform Organisation (Portal Violation)
+                            </button>
+                            <button class="preset-chip" onclick="applyPreset('founder_approve_org')">
+                                <span class="preset-tag allow">ALLOW</span>
+                                <strong>Clara (Founder)</strong> &rarr; Foundational Organisation Approval
+                            </button>
+                        </div>
                     </div>
                 </div>
-                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-                    Click any attack button below to trigger an invariant breach. Watch PostgreSQL's triggers and constraints defend the system in real time.
-                </p>
 
-                <div class="attack-grid">
-                    <button class="btn-attack" onclick="triggerAttack('duplicate_platform_org')">
-                        <span>💥 Attempt 2nd Platform Org</span>
-                        <small>Unique Partial Index Defense</small>
-                    </button>
-                    <button class="btn-attack" onclick="triggerAttack('audit_update')">
-                        <span>💥 Tamper Audit Log (UPDATE)</span>
-                        <small>Immutable Trigger Defense</small>
-                    </button>
-                    <button class="btn-attack" onclick="triggerAttack('audit_delete')">
-                        <span>💥 Delete Audit Log (DELETE)</span>
-                        <small>Append-Only Block Defense</small>
-                    </button>
-                    <button class="btn-attack" onclick="triggerAttack('audit_truncate')">
-                        <span>💥 Truncate Audit Log (TRUNCATE)</span>
-                        <small>Statement Trigger Defense</small>
-                    </button>
-                    <button class="btn-attack" onclick="triggerAttack('active_member_nonactive_org')">
-                        <span>💥 Join Non-ACTIVE Org</span>
-                        <small>Parent Lifecycle Check</small>
-                    </button>
-                    <button class="btn-attack" onclick="triggerAttack('intern_no_expiry')">
-                        <span>💥 Intern Without Expiration</span>
-                        <small>Role Expiry Requirement</small>
-                    </button>
-                    <button class="btn-attack" onclick="triggerAttack('delete_last_founder')">
-                        <span>💥 Remove Last Founder</span>
-                        <small>Custodian Protection Trigger</small>
-                    </button>
-                    <button class="btn-attack" onclick="triggerAttack('both_targets_share_grant')">
-                        <span>💥 Share With Both Targets</span>
-                        <small>Target Exclusivity Check</small>
-                    </button>
-                </div>
+                <!-- Live Evaluation Result Display -->
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">Real-Time Evaluation Verdict</div>
+                            <div class="card-subtitle">Zero-trust decision pipeline executed against live schema</div>
+                        </div>
+                        <span id="decision-timestamp" class="mono" style="font-size: 11px; color: var(--text-muted);">-</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="decision-box-container">
+                            <div class="decision-box" id="decision-box">
+                                <div class="decision-banner">
+                                    <span class="decision-pill" id="decision-pill">SELECT AN ACTION</span>
+                                    <span class="mono" id="decision-code">AUTH_EVAL_ID</span>
+                                </div>
+                                <div class="decision-summary" id="decision-summary">
+                                    Click "Evaluate Authorisation Decision" or choose an executive preset on the left to inspect the evaluation pipeline.
+                                </div>
 
-                <div class="panel-header" style="margin-top: 10px; margin-bottom: 8px;">
-                    <div class="panel-title" style="font-size: 13px; color: var(--text-muted);">
-                        <span>💻 Live Database Defense Log:</span>
+                                <div class="actor-resource-meta" id="decision-meta">
+                                    <div class="meta-item">
+                                        <div class="meta-label">Evaluated Actor</div>
+                                        <div class="meta-val" id="meta-actor">-</div>
+                                    </div>
+                                    <div class="meta-item">
+                                        <div class="meta-label">Role & Level</div>
+                                        <div class="meta-val" id="meta-role">-</div>
+                                    </div>
+                                    <div class="meta-item">
+                                        <div class="meta-label">Target Organisation</div>
+                                        <div class="meta-val" id="meta-org">-</div>
+                                    </div>
+                                    <div class="meta-item">
+                                        <div class="meta-label">Requested Capability</div>
+                                        <div class="meta-val" id="meta-perm">-</div>
+                                    </div>
+                                </div>
+
+                                <div style="font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
+                                    Rule Evaluation Pipeline
+                                </div>
+                                <div class="rules-pipeline" id="rules-pipeline">
+                                    <div style="color: var(--text-muted); font-size: 12px; padding: 12px;">No active decision evaluated yet.</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="terminal-box" id="terminal">
-                    <div class="terminal-line info">> Connected to PostgreSQL 18.3 at 127.0.0.1:5433</div>
-                    <div class="terminal-line info">> All 27 tables initialized with Row-Level Security (RLS) enabled.</div>
-                    <div class="terminal-line info">> Ready. Click any scenario above to observe database invariants.</div>
-                </div>
             </div>
+        </div>
 
-            <!-- Right: Conformance Runner & Seat Allocations -->
-            <div class="panel">
-                <div class="panel-header">
-                    <div class="panel-title">
-                        <span>⚡ Automated Conformance Suite</span>
+        <!-- TAB 2: ROLE-PERMISSION MATRIX -->
+        <div id="tab-matrix" class="tab-panel">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Comprehensive Role-Permission Capability Matrix</div>
+                        <div class="card-subtitle">Data-driven mapping of integer role levels (5-100) vs 22 registered capabilities</div>
                     </div>
-                    <button class="btn-action" id="btn-run-tests" onclick="runVitestSuite()">Run 29 Tests</button>
                 </div>
-                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-                    Executes the full test suite (schema, invariants, cascade, atomic approvals, seat race, immutable audit, runtime privileges) directly against PostgreSQL.
-                </p>
-                <div class="terminal-box" id="test-output" style="min-height: 275px; max-height: 290px;">
-                    <div class="terminal-line info">> Click "Run 29 Tests" to execute the full conformance pass.</div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="matrix-container" id="matrix-container">
+                        <div style="padding: 40px; text-align: center; color: var(--text-muted);">Loading role-permission matrix from database...</div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Organisations Directory -->
-        <div class="panel" style="margin-bottom: 24px;">
-            <div class="panel-header">
-                <div class="panel-title">
-                    <span>🏢 Organisations Directory</span>
+        <!-- TAB 3: ORGANISATIONS & WORKSPACES -->
+        <div id="tab-orgs" class="tab-panel">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Multi-Tenant Organisation Directory</div>
+                        <div class="card-subtitle">Portal segregation, tenant types, status lifecycle, and scoped workspaces</div>
+                    </div>
                 </div>
-            </div>
-            <div class="table-responsive">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Organisation Name</th>
-                            <th>Portal</th>
-                            <th>Tenant Type</th>
-                            <th>Status</th>
-                            <th>Members</th>
-                            <th>Created At</th>
-                        </tr>
-                    </thead>
-                    <tbody id="orgs-table-body">
-                        <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading organisations...</td></tr>
-                    </tbody>
-                </table>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-responsive">
+                        <table class="data-table" id="table-orgs">
+                            <thead>
+                                <tr>
+                                    <th>Organisation Name</th>
+                                    <th>Portal Realm</th>
+                                    <th>Tenant Type</th>
+                                    <th>Status</th>
+                                    <th>Members</th>
+                                    <th>Workspaces</th>
+                                    <th>Created At</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Memberships Directory -->
-        <div class="panel" style="margin-bottom: 24px;">
-            <div class="panel-header">
-                <div class="panel-title">
-                    <span>👥 Memberships & Role Ceilings</span>
+        <!-- TAB 4: MEMBERSHIPS & SESSIONS -->
+        <div id="tab-members" class="tab-panel">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Active Memberships & 24h Context Sessions</div>
+                        <div class="card-subtitle">Roles attach exclusively to memberships (never to users), with time-bounds and AAL levels</div>
+                    </div>
                 </div>
-            </div>
-            <div class="table-responsive">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>User Code</th>
-                            <th>Email</th>
-                            <th>Organisation</th>
-                            <th>Role Key</th>
-                            <th>Authority Level</th>
-                            <th>Status</th>
-                            <th>Expiration</th>
-                        </tr>
-                    </thead>
-                    <tbody id="members-table-body">
-                        <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading members...</td></tr>
-                    </tbody>
-                </table>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-responsive">
+                        <table class="data-table" id="table-members">
+                            <thead>
+                                <tr>
+                                    <th>User Code</th>
+                                    <th>Email Address</th>
+                                    <th>Organisation</th>
+                                    <th>Assigned Role</th>
+                                    <th>Authority Level</th>
+                                    <th>Status</th>
+                                    <th>AAL Requirement</th>
+                                    <th>Expiration Window</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Live Append-Only Audit Trail -->
-        <div class="panel">
-            <div class="panel-header">
-                <div class="panel-title">
-                    <span>📜 Append-Only Audit Ledger</span>
-                </div>
-            </div>
-            <div class="table-responsive">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Action</th>
-                            <th>Target Entity</th>
-                            <th>Target ID</th>
-                            <th>Diff Details</th>
-                            <th>Timestamp</th>
-                        </tr>
-                    </thead>
-                    <tbody id="audit-table-body">
-                        <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading audit trail...</td></tr>
-                    </tbody>
-                </table>
+        <!-- TAB 5: SEAT QUOTAS -->
+        <div id="tab-seats" class="tab-panel">
+            <div class="seat-grid" id="seat-cards-container">
+                <!-- Dynamically generated seat progress cards -->
             </div>
         </div>
+
+        <!-- TAB 6: INVARIANTS & SECURITY GUARDRAILS -->
+        <div id="tab-invariants" class="tab-panel">
+            <div class="invariants-grid">
+                <!-- 1. Single Platform Org -->
+                <div class="invariant-card">
+                    <div>
+                        <div class="inv-header">
+                            <span class="inv-title">1. Single Platform Organisation</span>
+                            <span class="inv-enforcement">UNIQUE INDEX</span>
+                        </div>
+                        <div class="inv-desc">
+                            Prevents rogue platform root instances. Only one organization can hold <code>portal = 'platform'</code> in the entire database.
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline" style="width: 100%;" onclick="testInvariant('duplicate_platform_org', this)">
+                            ⚡ Verify: Attempt 2nd Platform Org
+                        </button>
+                        <div class="inv-result" id="res-duplicate_platform_org"></div>
+                    </div>
+                </div>
+
+                <!-- 2. Immutable Audit Log (UPDATE) -->
+                <div class="invariant-card">
+                    <div>
+                        <div class="inv-header">
+                            <span class="inv-title">2. Append-Only Immutable Audit Log</span>
+                            <span class="inv-enforcement">TRIGGER + REVOKE</span>
+                        </div>
+                        <div class="inv-desc">
+                            Audit ledger cannot be altered by anyone. Updates and deletes are intercepted and strictly aborted by database triggers.
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline" style="width: 100%;" onclick="testInvariant('audit_update', this)">
+                            ⚡ Verify: Attempt Audit UPDATE
+                        </button>
+                        <div class="inv-result" id="res-audit_update"></div>
+                    </div>
+                </div>
+
+                <!-- 3. Audit Log (TRUNCATE) -->
+                <div class="invariant-card">
+                    <div>
+                        <div class="inv-header">
+                            <span class="inv-title">3. Audit Table Truncation Defense</span>
+                            <span class="inv-enforcement">EVENT TRIGGER</span>
+                        </div>
+                        <div class="inv-desc">
+                            Prevents bulk destruction of audit evidence via <code>TRUNCATE TABLE audit_logs</code>.
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline" style="width: 100%;" onclick="testInvariant('audit_truncate', this)">
+                            ⚡ Verify: Attempt Audit TRUNCATE
+                        </button>
+                        <div class="inv-result" id="res-audit_truncate"></div>
+                    </div>
+                </div>
+
+                <!-- 4. Active Org Dependency -->
+                <div class="invariant-card">
+                    <div>
+                        <div class="inv-header">
+                            <span class="inv-title">4. Active Organisation Dependency</span>
+                            <span class="inv-enforcement">BEFORE TRIGGER</span>
+                        </div>
+                        <div class="inv-desc">
+                            A user cannot hold an active membership in an organisation unless the organisation has completed onboarding and is <code>ACTIVE</code>.
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline" style="width: 100%;" onclick="testInvariant('active_member_nonactive_org', this)">
+                            ⚡ Verify: Join Non-ACTIVE Org
+                        </button>
+                        <div class="inv-result" id="res-active_member_nonactive_org"></div>
+                    </div>
+                </div>
+
+                <!-- 5. Expiry Required Roles -->
+                <div class="invariant-card">
+                    <div>
+                        <div class="inv-header">
+                            <span class="inv-title">5. Timebound Expiration Enforcement</span>
+                            <span class="inv-enforcement">ROW TRIGGER</span>
+                        </div>
+                        <div class="inv-desc">
+                            Temporary roles (Intern, Collaborator, Guest) strictly require an explicit <code>expires_at</code> timestamp. Creation without expiry is aborted.
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline" style="width: 100%;" onclick="testInvariant('intern_no_expiry', this)">
+                            ⚡ Verify: Intern Without Expiry
+                        </button>
+                        <div class="inv-result" id="res-intern_no_expiry"></div>
+                    </div>
+                </div>
+
+                <!-- 6. Custodian Protection -->
+                <div class="invariant-card">
+                    <div>
+                        <div class="inv-header">
+                            <span class="inv-title">6. Custodian Protection Rule</span>
+                            <span class="inv-enforcement">INTEGRITY TRIGGER</span>
+                        </div>
+                        <div class="inv-desc">
+                            Prevents accidental orphan lockouts: The last active Founder or primary Business Owner cannot be deleted or suspended while the organisation is active.
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline" style="width: 100%;" onclick="testInvariant('delete_last_founder', this)">
+                            ⚡ Verify: Remove Last Founder
+                        </button>
+                        <div class="inv-result" id="res-delete_last_founder"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 7: IMMUTABLE AUDIT LEDGER -->
+        <div id="tab-audit" class="tab-panel">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Cryptographically Guarded Audit Ledger</div>
+                        <div class="card-subtitle">Every administrative decision, grant, and state mutation recorded irrevocably</div>
+                    </div>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-responsive">
+                        <table class="data-table" id="table-audit">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Actor</th>
+                                    <th>Action</th>
+                                    <th>Entity</th>
+                                    <th>Target ID</th>
+                                    <th>State Diff</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
-        async function fetchStatus() {
+        // Global State Cache
+        let state = {
+            roles: [],
+            permissions: [],
+            rolePermissions: [],
+            organisations: [],
+            memberships: [],
+            workspaces: [],
+            seats: [],
+            audit: []
+        };
+
+        // Tab Switching
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.remove('active'));
+
+            event.currentTarget.classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
+
+        // Initialize Data Loading
+        async function loadAllData() {
             try {
-                const res = await fetch('/api/status');
-                const data = await res.json();
-                if (data.status === 'CONNECTED') {
-                    document.getElementById('stat-orgs').textContent = data.counts.organisations;
-                    document.getElementById('stat-members').textContent = data.counts.memberships;
-                    document.getElementById('stat-seats').textContent = `${data.counts.seatsAllocated} / ${data.counts.seatsTotal}`;
-                    document.getElementById('stat-audit').textContent = data.counts.auditLogs;
+                const [statusRes, rolesRes, permsRes, rolePermsRes, orgsRes, memsRes, wsRes, seatsRes, auditRes] = await Promise.all([
+                    fetch('/api/status').then(r => r.json()),
+                    fetch('/api/roles').then(r => r.json()),
+                    fetch('/api/permissions').then(r => r.json()),
+                    fetch('/api/role-permissions').then(r => r.json()),
+                    fetch('/api/organisations').then(r => r.json()),
+                    fetch('/api/memberships').then(r => r.json()),
+                    fetch('/api/workspaces').then(r => r.json()),
+                    fetch('/api/seats').then(r => r.json()),
+                    fetch('/api/audit').then(r => r.json())
+                ]);
+
+                // Update KPIs
+                if (statusRes.counts) {
+                    document.getElementById('kpi-orgs').textContent = statusRes.counts.organisations;
+                    document.getElementById('kpi-members').textContent = statusRes.counts.memberships;
+                    document.getElementById('kpi-roles').textContent = statusRes.counts.roles;
+                    document.getElementById('kpi-perms').textContent = statusRes.counts.permissions;
+                    document.getElementById('kpi-seats').textContent = `${statusRes.counts.seatsAllocated} / ${statusRes.counts.seatsTotal}`;
+                    document.getElementById('kpi-audit').textContent = statusRes.counts.auditLogs;
                 }
+
+                // Cache state
+                state.roles = rolesRes;
+                state.permissions = permsRes;
+                state.rolePermissions = rolePermsRes;
+                state.organisations = orgsRes;
+                state.memberships = memsRes;
+                state.workspaces = wsRes;
+                state.seats = seatsRes;
+                state.audit = auditRes;
+
+                // Render Views
+                renderSimulatorDropdowns();
+                renderMatrix();
+                renderOrganisationsTable();
+                renderMembershipsTable();
+                renderSeatsView();
+                renderAuditTable();
+
             } catch (err) {
-                console.error(err);
+                console.error('Failed to load console data:', err);
             }
         }
 
-        async function fetchOrganisations() {
-            try {
-                const res = await fetch('/api/organisations');
-                const data = await res.json();
-                const tbody = document.getElementById('orgs-table-body');
-                if (!data || data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No organisations found.</td></tr>';
-                    return;
+        // 1. SIMULATOR
+        function renderSimulatorDropdowns() {
+            const userSelect = document.getElementById('sim-user');
+            const orgSelect = document.getElementById('sim-org');
+            const permSelect = document.getElementById('sim-perm');
+
+            userSelect.innerHTML = state.memberships.map(m => `
+                <option value="${m.user_id}" data-org="${m.org_id}">
+                    ${m.email} (${m.role_name} - L${m.level}) [${m.org_name}]
+                </option>
+            `).join('');
+
+            orgSelect.innerHTML = state.organisations.map(o => `
+                <option value="${o.id}">
+                    ${o.name} (${o.portal.toUpperCase()}) - Status: ${o.status}
+                </option>
+            `).join('');
+
+            // Group permissions by module
+            const modules = {};
+            state.permissions.forEach(p => {
+                const mod = p.key.split('.')[0].toUpperCase();
+                if (!modules[mod]) modules[mod] = [];
+                modules[mod].push(p);
+            });
+
+            permSelect.innerHTML = Object.keys(modules).map(mod => `
+                <optgroup label="${mod} MODULE">
+                    ${modules[mod].map(p => `
+                        <option value="${p.key}">
+                            ${p.key} - ${p.name} (${p.min_aal.toUpperCase()})
+                        </option>
+                    `).join('')}
+                </optgroup>
+            `).join('');
+
+            // Sync initial state
+            onUserSelectChange();
+        }
+
+        function onUserSelectChange() {
+            const userSelect = document.getElementById('sim-user');
+            const selectedOption = userSelect.options[userSelect.selectedIndex];
+            if (selectedOption) {
+                const orgId = selectedOption.getAttribute('data-org');
+                if (orgId) {
+                    document.getElementById('sim-org').value = orgId;
                 }
-                tbody.innerHTML = data.map(o => `
-                    <tr>
-                        <td style="font-weight: 600;">${o.name}</td>
-                        <td><span class="badge" style="background: rgba(99, 102, 241, 0.15); color: #818CF8;">${o.portal}</span></td>
-                        <td>${o.tenant_type_key || '<span style="color:#64748B;">None (Platform)</span>'}</td>
-                        <td><span class="badge badge-${o.status.toLowerCase()}">${o.status}</span></td>
-                        <td>${o.member_count}</td>
-                        <td>${new Date(o.created_at).toLocaleDateString()}</td>
-                    </tr>
+            }
+        }
+
+        function onOrgSelectChange() {
+            // Keep as is
+        }
+
+        async function evaluateDecision() {
+            const userId = document.getElementById('sim-user').value;
+            const organisationId = document.getElementById('sim-org').value;
+            const permissionKey = document.getElementById('sim-perm').value;
+
+            try {
+                const res = await fetch('/api/evaluate-policy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, organisationId, permissionKey })
+                });
+
+                const data = await res.json();
+                renderDecisionResult(data);
+            } catch (err) {
+                alert('Evaluation failed: ' + err.message);
+            }
+        }
+
+        function renderDecisionResult(data) {
+            const box = document.getElementById('decision-box');
+            const pill = document.getElementById('decision-pill');
+            const code = document.getElementById('decision-code');
+            const summary = document.getElementById('decision-summary');
+            const metaActor = document.getElementById('meta-actor');
+            const metaRole = document.getElementById('meta-role');
+            const metaOrg = document.getElementById('meta-org');
+            const metaPerm = document.getElementById('meta-perm');
+            const pipeline = document.getElementById('rules-pipeline');
+            const timestamp = document.getElementById('decision-timestamp');
+
+            timestamp.textContent = new Date().toLocaleTimeString();
+
+            const isAllow = data.decision === 'ALLOW';
+            box.className = 'decision-box ' + (isAllow ? 'allow' : 'deny');
+            pill.className = 'decision-pill ' + (isAllow ? 'allow' : 'deny');
+            pill.innerHTML = isAllow ? '✓ ALLOW (AUTHORISED)' : '✕ DENY (ACCESS BLOCKED)';
+            code.textContent = 'RULE_VERDICT_' + data.decision;
+            summary.textContent = data.summary;
+
+            if (data.actor) {
+                metaActor.textContent = data.actor.email;
+                metaRole.textContent = `${data.actor.role} (Level ${data.actor.level})`;
+                metaOrg.textContent = `${data.actor.orgName} (${data.actor.portal.toUpperCase()})`;
+                metaPerm.textContent = `${data.permission.name} [${data.permission.key}]`;
+            }
+
+            if (data.ruleChecks && data.ruleChecks.length) {
+                pipeline.innerHTML = data.ruleChecks.map(c => `
+                    <div class="rule-step ${c.pass ? 'pass' : 'fail'}">
+                        <span class="rule-icon ${c.pass ? 'pass' : 'fail'}">${c.pass ? '✓' : '✕'}</span>
+                        <div>
+                            <div class="rule-title">${c.name}</div>
+                            <div class="rule-detail">${c.detail}</div>
+                        </div>
+                    </div>
                 `).join('');
-            } catch (err) {
-                console.error(err);
             }
         }
 
-        async function fetchMemberships() {
-            try {
-                const res = await fetch('/api/memberships');
-                const data = await res.json();
-                const tbody = document.getElementById('members-table-body');
-                if (!data || data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No memberships found.</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = data.map(m => `
-                    <tr>
-                        <td style="font-family: 'JetBrains Mono'; color: #38BDF8;">${m.user_code}</td>
-                        <td>${m.email}</td>
-                        <td>${m.org_name}</td>
-                        <td style="font-weight: 600;">${m.role_key}</td>
-                        <td><span class="badge" style="background: rgba(6, 182, 212, 0.15); color: #22D3EE;">Level ${m.level}</span></td>
-                        <td><span class="badge badge-${m.status.toLowerCase()}">${m.status}</span></td>
-                        <td>${m.expires_at ? new Date(m.expires_at).toLocaleDateString() : '<span style="color:#64748B;">None</span>'}</td>
-                    </tr>
-                `).join('');
-            } catch (err) {
-                console.error(err);
+        function applyPreset(preset) {
+            const userSelect = document.getElementById('sim-user');
+            const permSelect = document.getElementById('sim-perm');
+
+            if (preset === 'elena_write') {
+                const elena = state.memberships.find(m => m.email.includes('elena'));
+                if (elena) userSelect.value = elena.user_id;
+                onUserSelectChange();
+                permSelect.value = 'project.records.write';
+            } else if (preset === 'intern_delete') {
+                const alex = state.memberships.find(m => m.email.includes('alex'));
+                if (alex) userSelect.value = alex.user_id;
+                onUserSelectChange();
+                permSelect.value = 'project.records.delete';
+            } else if (preset === 'intern_read') {
+                const alex = state.memberships.find(m => m.email.includes('alex'));
+                if (alex) userSelect.value = alex.user_id;
+                onUserSelectChange();
+                permSelect.value = 'project.records.read';
+            } else if (preset === 'owner_approve_org') {
+                const marcus = state.memberships.find(m => m.email.includes('marcus'));
+                if (marcus) userSelect.value = marcus.user_id;
+                onUserSelectChange();
+                permSelect.value = 'platform.organisations.approve';
+            } else if (preset === 'founder_approve_org') {
+                const founder = state.memberships.find(m => m.role_key === 'founder');
+                if (founder) userSelect.value = founder.user_id;
+                onUserSelectChange();
+                permSelect.value = 'platform.organisations.approve';
             }
+
+            evaluateDecision();
         }
 
-        async function fetchAuditLogs() {
-            try {
-                const res = await fetch('/api/audit');
-                const data = await res.json();
-                const tbody = document.getElementById('audit-table-body');
-                if (!data || data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No audit entries yet.</td></tr>';
-                    return;
+        // 2. ROLE-PERMISSION MATRIX
+        function renderMatrix() {
+            const container = document.getElementById('matrix-container');
+            const roles = state.roles;
+            const perms = state.permissions;
+            const map = new Set(state.rolePermissions.map(rp => `${rp.role_key}:${rp.permission_key}`));
+
+            let html = `
+                <table class="matrix-table">
+                    <thead>
+                        <tr>
+                            <th class="col-perm">Permission / Capability</th>
+                            ${roles.map(r => `
+                                <th class="col-role">
+                                    <div>${r.name}</div>
+                                    <span class="badge badge-level">L${r.level}</span>
+                                </th>
+                            `).join('')}
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            // Group by module
+            let currentModule = '';
+            perms.forEach(p => {
+                const mod = p.key.split('.')[0].toUpperCase();
+                if (mod !== currentModule) {
+                    currentModule = mod;
+                    html += `
+                        <tr style="background: rgba(255, 255, 255, 0.03);">
+                            <td colspan="${roles.length + 1}" style="font-weight: 700; color: var(--accent-indigo-light); text-align: left; padding: 8px 14px; font-size: 11px; letter-spacing: 0.05em;">
+                                ▸ ${currentModule} PERMISSION DOMAIN
+                            </td>
+                        </tr>
+                    `;
                 }
-                tbody.innerHTML = data.map(a => `
+
+                html += `
                     <tr>
-                        <td style="font-weight: 600; color: #38BDF8;">${a.action}</td>
-                        <td>${a.target_entity}</td>
-                        <td style="font-family: 'JetBrains Mono'; font-size: 11px;">${a.target_id}</td>
-                        <td style="font-family: 'JetBrains Mono'; font-size: 11px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                            ${a.diff ? JSON.stringify(a.diff) : '-'}
+                        <td class="col-perm-desc">
+                            <div style="font-weight: 600;">${p.name}</div>
+                            <div class="mono" style="font-size: 11px; color: var(--text-muted);">${p.key}</div>
                         </td>
-                        <td>${new Date(a.created_at).toLocaleTimeString()}</td>
+                        ${roles.map(r => {
+                            const has = map.has(`${r.key}:${p.key}`);
+                            return has 
+                                ? `<td class="matrix-cell-yes" title="${r.name} holds ${p.key}">✓</td>`
+                                : `<td class="matrix-cell-no">-</td>`;
+                        }).join('')}
                     </tr>
-                `).join('');
-            } catch (err) {
-                console.error(err);
-            }
+                `;
+            });
+
+            html += `</tbody></table>`;
+            container.innerHTML = html;
         }
 
-        async function triggerAttack(attackType) {
-            const terminal = document.getElementById('terminal');
-            terminal.innerHTML += `<div class="terminal-line info">> [ATTACK INITIATED]: Testing ${attackType}...</div>`;
-            terminal.scrollTop = terminal.scrollHeight;
+        // 3. ORGANISATIONS TABLE
+        function renderOrganisationsTable() {
+            const tbody = document.querySelector('#table-orgs tbody');
+            tbody.innerHTML = state.organisations.map(o => `
+                <tr>
+                    <td style="font-weight: 600;">${o.name}</td>
+                    <td><span class="badge badge-${o.portal}">${o.portal.toUpperCase()}</span></td>
+                    <td><code>${o.tenant_type_key || 'SYSTEM_ROOT'}</code></td>
+                    <td><span class="badge badge-${o.status.toLowerCase()}">${o.status}</span></td>
+                    <td><strong>${o.member_count}</strong> members</td>
+                    <td><strong>${o.workspace_count}</strong> workspaces</td>
+                    <td class="mono" style="font-size: 11px; color: var(--text-muted);">${new Date(o.created_at).toLocaleDateString()}</td>
+                </tr>
+            `).join('');
+        }
+
+        // 4. MEMBERSHIPS TABLE
+        function renderMembershipsTable() {
+            const tbody = document.querySelector('#table-members tbody');
+            tbody.innerHTML = state.memberships.map(m => `
+                <tr>
+                    <td class="mono">${m.user_code}</td>
+                    <td style="font-weight: 600;">${m.email}</td>
+                    <td>${m.org_name}</td>
+                    <td><span class="badge badge-platform">${m.role_name}</span></td>
+                    <td><span class="badge badge-level">Level ${m.level}</span></td>
+                    <td><span class="badge badge-${m.status.toLowerCase()}">${m.status}</span></td>
+                    <td><span class="mono" style="font-size: 11px;">${m.min_aal.toUpperCase()}</span></td>
+                    <td class="mono" style="font-size: 11px; color: ${m.expires_at ? 'var(--accent-amber)' : 'var(--text-muted)'};">
+                        ${m.expires_at ? new Date(m.expires_at).toLocaleDateString() : 'Permanent'}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // 5. SEATS VIEW
+        function renderSeatsView() {
+            const container = document.getElementById('seat-cards-container');
+            const apps = {};
+
+            state.seats.forEach(s => {
+                if (!apps[s.app_key]) {
+                    apps[s.app_key] = {
+                        name: s.app_name || s.app_key,
+                        orgName: s.org_name,
+                        roles: []
+                    };
+                }
+                apps[s.app_key].roles.push(s);
+            });
+
+            container.innerHTML = Object.keys(apps).map(appKey => {
+                const app = apps[appKey];
+                const totalAlloc = app.roles.reduce((sum, r) => sum + r.allocated_seats, 0);
+                const totalLimit = app.roles.reduce((sum, r) => sum + r.seat_limit, 0);
+                const pct = totalLimit > 0 ? Math.round((totalAlloc / totalLimit) * 100) : 0;
+
+                return `
+                    <div class="seat-card">
+                        <div class="seat-header">
+                            <div>
+                                <div class="seat-app-title">${app.name}</div>
+                                <div style="font-size: 12px; color: var(--text-muted);">${app.orgName}</div>
+                            </div>
+                            <span class="badge ${pct >= 100 ? 'badge-suspended' : 'badge-active'}">
+                                ${totalAlloc} / ${totalLimit} Allocated (${pct}%)
+                            </span>
+                        </div>
+
+                        <div class="seat-bar-bg">
+                            <div class="seat-bar-fill ${pct >= 100 ? 'warning' : ''}" style="width: ${Math.min(pct, 100)}%;"></div>
+                        </div>
+
+                        <div style="margin-top: 16px;">
+                            ${app.roles.map(r => `
+                                <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 6px 0; border-bottom: 1px solid var(--border-color);">
+                                    <span style="font-weight: 500;">Role: <strong>${r.role_name}</strong></span>
+                                    <span class="mono">${r.allocated_seats} of ${r.seat_limit} seats</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // 6. INVARIANT TESTING
+        async function testInvariant(attackType, btn) {
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<span class="spinner"></span> Executing against database engine...';
+            btn.disabled = true;
+
+            const resDiv = document.getElementById('res-' + attackType);
 
             try {
                 const res = await fetch('/api/attack', {
@@ -608,54 +1651,59 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ attackType })
                 });
-                const result = await res.json();
 
-                if (result.blocked) {
-                    terminal.innerHTML += `<div class="terminal-line success">✓ [DEFENDED BY POSTGRESQL]: Operation Aborted.</div>`;
-                    terminal.innerHTML += `<div class="terminal-line error">  Error Code: ${result.errorCode}</div>`;
-                    terminal.innerHTML += `<div class="terminal-line error">  Message: ${result.errorMessage}</div>`;
-                } else {
-                    terminal.innerHTML += `<div class="terminal-line error">❌ ${result.message}</div>`;
-                }
-                terminal.scrollTop = terminal.scrollHeight;
+                const data = await res.json();
+                resDiv.className = 'inv-result show ' + (data.blocked ? 'success' : 'fail');
+                resDiv.innerHTML = `
+                    <div><strong>${data.blocked ? '🛡️ DEFENDED BY POSTGRES' : '⚠️ FAILED TO DEFEND'}</strong></div>
+                    <div style="margin-top: 4px; font-size: 11px;">${data.errorMessage || data.message}</div>
+                    <div style="margin-top: 2px; font-size: 10px; opacity: 0.8;">Engine Detail: ${data.detail || 'Trigger validation error raised'}</div>
+                `;
             } catch (err) {
-                terminal.innerHTML += `<div class="terminal-line error">Fetch error: ${err.message}</div>`;
+                resDiv.className = 'inv-result show fail';
+                resDiv.textContent = 'Execution error: ' + err.message;
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
             }
         }
 
-        async function runVitestSuite() {
-            const btn = document.getElementById('btn-run-tests');
-            const outputBox = document.getElementById('test-output');
-            btn.disabled = true;
-            btn.textContent = 'Running Tests...';
-            outputBox.innerHTML = '<div class="terminal-line info">> Spawning Vitest process against PostgreSQL 18.3...</div>';
+        // 7. AUDIT TABLE
+        function renderAuditTable() {
+            const tbody = document.querySelector('#table-audit tbody');
+            tbody.innerHTML = state.audit.map(a => `
+                <tr>
+                    <td class="mono" style="font-size: 11px;">${new Date(a.created_at).toLocaleTimeString()}</td>
+                    <td><strong>${a.actor_email || a.actor_code || 'SYSTEM_INTERNAL'}</strong></td>
+                    <td><span class="badge badge-platform">${a.action}</span></td>
+                    <td><code>${a.target_entity}</code></td>
+                    <td class="mono" style="font-size: 11px;">${a.target_id.slice(0, 18)}...</td>
+                    <td><div class="audit-diff" title='${JSON.stringify(a.diff)}'>${JSON.stringify(a.diff)}</div></td>
+                </tr>
+            `).join('');
+        }
+
+        // 8. Run Vitest Suite in Modal
+        async function runVitestModal() {
+            const originalText = event.currentTarget.innerHTML;
+            event.currentTarget.innerHTML = '<span class="spinner"></span> Running 30 Conformance Tests...';
+            event.currentTarget.disabled = true;
 
             try {
                 const res = await fetch('/api/run-tests', { method: 'POST' });
-                const result = await res.json();
-                
-                outputBox.innerHTML = `<pre style="color: ${result.success ? '#34D399' : '#FB7185'}; white-space: pre-wrap; font-size: 11px;">${result.output}</pre>`;
-                btn.disabled = false;
-                btn.textContent = 'Run 29 Tests';
-                
-                // Refresh table statistics
-                fetchStatus();
-                fetchOrganisations();
-                fetchMemberships();
-                fetchAuditLogs();
+                const data = await res.json();
+                alert(data.success ? '✓ 30 of 30 Database Invariant & Security Tests PASSED!' : 'Test execution encountered issues:\n' + data.output);
+                loadAllData();
             } catch (err) {
-                outputBox.innerHTML = `<div class="terminal-line error">Failed to run tests: ${err.message}</div>`;
-                btn.disabled = false;
-                btn.textContent = 'Run 29 Tests';
+                alert('Test run error: ' + err.message);
+            } finally {
+                event.currentTarget.innerHTML = originalText;
+                event.currentTarget.disabled = false;
             }
         }
 
-        // Initial Load
-        fetchStatus();
-        fetchOrganisations();
-        fetchMemberships();
-        fetchAuditLogs();
-        setInterval(fetchStatus, 5000);
+        // Initial Boot
+        loadAllData();
     </script>
 </body>
 </html>
