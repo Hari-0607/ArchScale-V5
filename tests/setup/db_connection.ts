@@ -80,7 +80,8 @@ export async function createIsolatedTestDatabase(testDbName: string): Promise<pg
         '007_append_only_audit_log.sql',
         '008_database_invariants_and_functions.sql',
         '009_least_privilege_runtime_role.sql',
-        '010_supabase_staging_compatibility.sql'
+        '010_supabase_staging_compatibility.sql',
+        '011_user_mirror_rls_policy.sql'
     ];
 
     for (const file of migrationFiles) {
