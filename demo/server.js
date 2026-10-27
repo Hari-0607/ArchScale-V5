@@ -461,11 +461,13 @@ const server = http.createServer(async (req, res) => {
             let secondInternRejected = false;
             let rejectionError = null;
 
+            await client.query('SAVEPOINT seat_test_sp;');
             try {
                 await client.query(`SELECT fn_approve_membership('${rogueReq}', '${ownerMemId}', 'Illegal approval');`);
             } catch (seatErr) {
                 secondInternRejected = true;
                 rejectionError = seatErr.message;
+                await client.query('ROLLBACK TO SAVEPOINT seat_test_sp;');
             }
 
             if (!secondInternRejected) {
