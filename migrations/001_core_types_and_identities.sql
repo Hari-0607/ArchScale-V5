@@ -15,7 +15,7 @@ END $$;
 -- Fixed Lifecycles and Core Classifications
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'org_status') THEN
+    IF to_regtype('public.org_status') IS NULL THEN
         CREATE TYPE org_status AS ENUM (
             'APPLIED',
             'PENDING_REVIEW',
@@ -26,7 +26,7 @@ BEGIN
         );
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'membership_status') THEN
+    IF to_regtype('public.membership_status') IS NULL THEN
         CREATE TYPE membership_status AS ENUM (
             'INVITED',
             'REQUESTED',
@@ -40,7 +40,7 @@ BEGIN
         );
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'request_status') THEN
+    IF to_regtype('public.request_status') IS NULL THEN
         CREATE TYPE request_status AS ENUM (
             'PENDING',
             'APPROVED',
@@ -49,14 +49,14 @@ BEGIN
         );
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'portal_type') THEN
+    IF to_regtype('public.portal_type') IS NULL THEN
         CREATE TYPE portal_type AS ENUM (
             'platform',
             'subscriber'
         );
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'aal_level') THEN
+    IF to_regtype('public.aal_level') IS NULL THEN
         CREATE TYPE aal_level AS ENUM (
             'aal1',
             'aal2',
