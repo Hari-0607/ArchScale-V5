@@ -57,12 +57,19 @@ describe('SupabaseProvider Staging Integration Suite (Real Supabase Auth)', () =
             // Clean up Supabase Auth user via admin API
             await adminSupabase.auth.admin.deleteUser(testUserId).catch(() => {});
 
-            // Clean up public.users test row
-            const client = await runtimePool.connect();
+            // Clean up public.users test row using admin connection (runtime role has no DELETE privilege)
+            const pg = await import('pg');
+            const adminClient = new pg.default.Client({
+                connectionString: config.supabaseDbAdminUrl,
+                ssl: { rejectUnauthorized: false }
+            });
             try {
-                await client.query('DELETE FROM users WHERE id = $1;', [testUserId]);
+                await adminClient.connect();
+                await adminClient.query('DELETE FROM users WHERE id = $1;', [testUserId]);
+            } catch {
+                // Ignore cleanup errors
             } finally {
-                client.release();
+                await adminClient.end().catch(() => {});
             }
         }
     });
