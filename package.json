@@ -12,7 +12,13 @@
     "proof": "node demo/server.js",
     "build": "tsc"
   },
-  "keywords": ["auth", "security", "multi-tenant", "rbac", "rls"],
+  "keywords": [
+    "auth",
+    "security",
+    "multi-tenant",
+    "rbac",
+    "rls"
+  ],
   "author": "ArchScale Platform Team",
   "license": "UNLICENSED",
   "devDependencies": {
@@ -22,5 +28,8 @@
     "pg": "^8.13.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0"
   }
 }
