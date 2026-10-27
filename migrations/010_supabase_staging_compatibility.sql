@@ -74,6 +74,15 @@ BEGIN
     END LOOP;
 END $$;
 
+-- Operational grants to archscale_app_runtime on existing tables and functions
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO archscale_app_runtime;
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM archscale_app_runtime, PUBLIC;
+GRANT SELECT, INSERT ON audit_logs TO archscale_app_runtime;
+GRANT EXECUTE ON FUNCTION is_context_valid(UUID) TO archscale_app_runtime;
+GRANT EXECUTE ON FUNCTION fn_approve_organisation TO archscale_app_runtime;
+GRANT EXECUTE ON FUNCTION fn_approve_membership TO archscale_app_runtime;
+GRANT EXECUTE ON FUNCTION fn_set_app_context(UUID) TO archscale_app_runtime;
+
 -- -----------------------------------------------------------------------------
 -- 4. Default Privileges & Forced RLS Lockdown for Current and Future Objects
 -- -----------------------------------------------------------------------------

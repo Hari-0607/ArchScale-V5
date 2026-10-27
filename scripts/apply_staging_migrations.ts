@@ -65,7 +65,7 @@ async function main() {
         '010_supabase_staging_compatibility.sql'
     ];
 
-    console.log('\n[2/3] Executing migrations 001-009 sequentially...\n');
+    console.log('\n[2/3] Executing migrations 001-010 sequentially...\n');
 
     const issues: Array<{ file: string; error: string; code?: string }> = [];
 
