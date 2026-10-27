@@ -87,7 +87,20 @@ async function main() {
 
     console.log('\n[3/3] Migration summary:');
     if (issues.length === 0) {
-        console.log('All migrations 001-009 applied cleanly without errors!');
+        console.log('All migrations 001-010 applied cleanly without errors!');
+        // Synchronize password for dedicated runtime role from .env
+        const runtimeUrl = process.env.ARCHSCALE_RUNTIME_DB_URL;
+        if (runtimeUrl) {
+            try {
+                const parsed = new URL(runtimeUrl);
+                if (parsed.password) {
+                    await client.query(`ALTER ROLE archscale_app_runtime WITH PASSWORD ${client.escapeLiteral(parsed.password)};`);
+                    console.log('Dedicated login role archscale_app_runtime password synchronized from .env.');
+                }
+            } catch (e: any) {
+                console.warn('Could not synchronize runtime role password:', e.message);
+            }
+        }
     } else {
         console.log(`Encountered ${issues.length} issue(s) during migration execution.`);
     }
