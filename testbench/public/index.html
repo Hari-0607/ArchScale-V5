@@ -960,29 +960,9 @@
                             <span>⚡ Evaluate Authorisation Decision</span>
                         </button>
 
-                        <!-- Presets for Executive Demo -->
-                        <div class="preset-scenarios">
-                            <div class="preset-label">Executive Demonstration Scenarios</div>
-                            <button class="preset-chip" onclick="applyPreset('elena_write')">
-                                <span class="preset-tag allow">ALLOW</span>
-                                <strong>Elena (Leader)</strong> &rarr; Write Project Records in Skyline Tower
-                            </button>
-                            <button class="preset-chip" onclick="applyPreset('intern_delete')">
-                                <span class="preset-tag deny">DENY</span>
-                                <strong>Alex (Intern)</strong> &rarr; Delete Project Records (Role Lacks Permission)
-                            </button>
-                            <button class="preset-chip" onclick="applyPreset('intern_read')">
-                                <span class="preset-tag allow">ALLOW</span>
-                                <strong>Alex (Intern)</strong> &rarr; Read Project Records (Within 90-day timebound expiry)
-                            </button>
-                            <button class="preset-chip" onclick="applyPreset('owner_approve_org')">
-                                <span class="preset-tag deny">DENY</span>
-                                <strong>Marcus (Studio Owner)</strong> &rarr; Approve Platform Organisation (Portal Violation)
-                            </button>
-                            <button class="preset-chip" onclick="applyPreset('founder_approve_org')">
-                                <span class="preset-tag allow">ALLOW</span>
-                                <strong>Clara (Founder)</strong> &rarr; Foundational Organisation Approval
-                            </button>
+                        <!-- Live Authorisation Helper -->
+                        <div id="preset-container" class="preset-scenarios">
+                            <!-- Populated dynamically only if live users exist in DB -->
                         </div>
                     </div>
                 </div>
