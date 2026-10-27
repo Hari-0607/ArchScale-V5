@@ -517,6 +517,204 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // API: Live Organisation Creation
+    if (pathname === '/api/organisations/create' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const { name, tenantTypeKey, portal, status } = JSON.parse(body || '{}');
+                if (!name || !name.trim()) throw new Error('Organisation name is required');
+                const p = portal || 'subscriber';
+                const s = status || 'ACTIVE';
+                const tt = p === 'platform' ? null : (tenantTypeKey || 'studio_owner');
+
+                const client = await pool.connect();
+                try {
+                    await client.query('BEGIN;');
+                    const orgRes = await client.query(`
+                        INSERT INTO organisations (name, tenant_type_key, portal, status)
+                        VALUES ($1, $2, $3, $4)
+                        RETURNING *;
+                    `, [name.trim(), tt, p, s]);
+                    const org = orgRes.rows[0];
+
+                    await client.query(`
+                        INSERT INTO workspaces (organisation_id, name, is_default)
+                        VALUES ($1, 'Main Workspace', true);
+                    `, [org.id]);
+
+                    await client.query('COMMIT;');
+                    res.writeHead(201, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, organisation: org }));
+                } catch (txErr) {
+                    await client.query('ROLLBACK;');
+                    throw txErr;
+                } finally {
+                    client.release();
+                }
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message, code: err.code }));
+            }
+        });
+        return;
+    }
+
+    // API: Live Organisation Status Change (Suspend / Activate)
+    if (pathname === '/api/organisations/status' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const { organisationId, status } = JSON.parse(body || '{}');
+                if (!organisationId || !status) throw new Error('organisationId and status are required');
+                const resData = await pool.query(`
+                    UPDATE organisations SET status = $2 WHERE id = $1 RETURNING *;
+                `, [organisationId, status]);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, organisation: resData.rows[0] }));
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message, code: err.code }));
+            }
+        });
+        return;
+    }
+
+    // API: Live Organisation Deletion
+    if (pathname === '/api/organisations/delete' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const { organisationId } = JSON.parse(body || '{}');
+                const chk = await pool.query('SELECT portal FROM organisations WHERE id = $1;', [organisationId]);
+                if (chk.rows.length === 0) throw new Error('Organisation not found');
+                if (chk.rows[0].portal === 'platform') throw new Error('Root platform organisation cannot be deleted');
+
+                const client = await pool.connect();
+                try {
+                    await client.query('BEGIN;');
+                    await client.query('DELETE FROM access_contexts WHERE organisation_id = $1;', [organisationId]);
+                    await client.query('DELETE FROM memberships WHERE organisation_id = $1;', [organisationId]);
+                    await client.query('DELETE FROM workspaces WHERE organisation_id = $1;', [organisationId]);
+                    await client.query('DELETE FROM access_requests WHERE organisation_id = $1;', [organisationId]);
+                    await client.query('DELETE FROM organisation_seats WHERE organisation_id = $1;', [organisationId]);
+                    await client.query('DELETE FROM organisation_entitlements WHERE organisation_id = $1;', [organisationId]);
+                    await client.query('DELETE FROM organisations WHERE id = $1;', [organisationId]);
+                    await client.query('COMMIT;');
+                } catch (e) {
+                    await client.query('ROLLBACK;');
+                    throw e;
+                } finally {
+                    client.release();
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message, code: err.code }));
+            }
+        });
+        return;
+    }
+
+    // API: Live User & Membership Creation
+    if (pathname === '/api/users/create-with-membership' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const { email, organisationId, roleKey, status, durationDays } = JSON.parse(body || '{}');
+                if (!email || !organisationId || !roleKey) throw new Error('Email, organisationId, and roleKey are required');
+
+                const userCode = 'USR-' + email.split('@')[0].toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+                let expiresAt = null;
+                if (durationDays) {
+                    expiresAt = new Date(Date.now() + parseInt(durationDays, 10) * 86400000).toISOString();
+                } else if (roleKey === 'intern' || roleKey === 'collaborator' || roleKey === 'guest') {
+                    expiresAt = new Date(Date.now() + 90 * 86400000).toISOString();
+                }
+
+                const client = await pool.connect();
+                try {
+                    await client.query('BEGIN;');
+                    const uRes = await client.query(`
+                        INSERT INTO users (email, user_code)
+                        VALUES ($1, $2)
+                        ON CONFLICT (email) DO UPDATE SET user_code = EXCLUDED.user_code
+                        RETURNING id;
+                    `, [email.trim(), userCode]);
+                    const userId = uRes.rows[0].id;
+
+                    const memRes = await client.query(`
+                        INSERT INTO memberships (user_id, organisation_id, role_key, status, expires_at)
+                        VALUES ($1, $2, $3, $4, $5)
+                        RETURNING *;
+                    `, [userId, organisationId, roleKey, status || 'ACTIVE', expiresAt]);
+
+                    await client.query('COMMIT;');
+                    res.writeHead(201, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, membership: memRes.rows[0] }));
+                } catch (e) {
+                    await client.query('ROLLBACK;');
+                    throw e;
+                } finally {
+                    client.release();
+                }
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message, code: err.code }));
+            }
+        });
+        return;
+    }
+
+    // API: Live Membership Deletion
+    if (pathname === '/api/memberships/delete' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const { membershipId } = JSON.parse(body || '{}');
+                if (!membershipId) throw new Error('membershipId is required');
+                const delRes = await pool.query('DELETE FROM memberships WHERE id = $1 RETURNING *;', [membershipId]);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, deleted: delRes.rows[0] }));
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message, code: err.code }));
+            }
+        });
+        return;
+    }
+
+    // API: Live Role-Permission Toggle
+    if (pathname === '/api/role-permissions/toggle' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const { roleKey, permissionKey, grant } = JSON.parse(body || '{}');
+                if (!roleKey || !permissionKey) throw new Error('roleKey and permissionKey are required');
+                if (grant) {
+                    await pool.query('INSERT INTO role_permissions (role_key, permission_key) VALUES ($1, $2) ON CONFLICT DO NOTHING;', [roleKey, permissionKey]);
+                } else {
+                    await pool.query('DELETE FROM role_permissions WHERE role_key = $1 AND permission_key = $2;', [roleKey, permissionKey]);
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, roleKey, permissionKey, granted: !!grant }));
+            } catch (err) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message }));
+            }
+        });
+        return;
+    }
+
     res.writeHead(404);
     res.end('Not Found');
 });
