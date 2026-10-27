@@ -511,30 +511,7 @@
             </div>
         </section>
 
-        <!-- PANEL 3: LIVE WALKTHROUGH -->
-        <section class="panel">
-            <div class="panel-header">
-                <div>
-                    <h2 class="panel-title">Panel 3: Live Approval Walkthrough</h2>
-                    <div class="panel-desc">Executes the committed happy path + deliberate failure on a dedicated DEMO organisation.</div>
-                </div>
-                <div style="display: flex; gap: 8px;">
-                    <button class="btn btn-outline btn-sm" onclick="resetWalkthroughData()">Reset Demo Data</button>
-                    <button class="btn btn-primary" id="btn-walkthrough" onclick="runWalkthrough()">
-                        <span>⚡ Run Approval Walkthrough</span>
-                    </button>
-                </div>
-            </div>
-            <div class="panel-body">
-                <div id="demo-mode-warning" style="display: none; background: rgba(245, 158, 11, 0.1); border: 1px solid var(--accent-amber); padding: 12px 16px; border-radius: 6px; color: #FCD34D; font-size: 12px; margin-bottom: 14px;">
-                    <strong>Notice:</strong> Panel 3 is disabled because <code>DEMO_MODE=true</code> environment variable is not active. This panel writes committed records to a dedicated demo organisation.
-                </div>
 
-                <div class="walkthrough-stepper" id="walkthrough-stepper">
-                    <div style="color: var(--text-muted); font-size: 12px;">Click "Run Approval Walkthrough" above to execute the 6-stage lifecycle against the live database.</div>
-                </div>
-            </div>
-        </section>
 
     </main>
 
@@ -714,52 +691,7 @@
             }
         }
 
-        // Panel 3: Walkthrough Runner
-        async function runWalkthrough() {
-            const btn = document.getElementById('btn-walkthrough');
-            const stepper = document.getElementById('walkthrough-stepper');
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner"></span> Running Walkthrough...';
-            stepper.innerHTML = '<div style="color: var(--text-secondary); font-size: 12px;"><span class="spinner"></span> Executing 6-step lifecycle against PostgreSQL...</div>';
 
-            try {
-                const res = await fetch('/api/walkthrough', { method: 'POST' });
-                const data = await res.json();
-
-                if (!res.ok) {
-                    stepper.innerHTML = `<div class="walkthrough-step error"><strong>Error:</strong> ${escapeHtml(data.error)}</div>`;
-                    return;
-                }
-
-                stepper.innerHTML = data.logs.map(l => `
-                    <div class="walkthrough-step ${l.error ? 'error' : 'success'}">
-                        <div>
-                            <strong>Step ${l.step}:</strong> ${escapeHtml(l.action)}
-                            ${l.error ? `<div style="color: #F87171; font-family: var(--font-mono); font-size: 11px; margin-top: 4px;">Verified Rejection: ${escapeHtml(l.error)}</div>` : ''}
-                        </div>
-                        <span class="status-badge ${l.error ? 'badge-fail' : 'badge-pass'}">${l.error ? 'REJECTED' : 'SUCCESS'}</span>
-                    </div>
-                `).join('');
-
-                refreshDatabaseState();
-            } catch (err) {
-                stepper.innerHTML = `<div class="walkthrough-step error">Execution error: ${escapeHtml(err.message)}</div>`;
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = '<span>⚡ Run Approval Walkthrough</span>';
-            }
-        }
-
-        async function resetWalkthroughData() {
-            try {
-                const res = await fetch('/api/walkthrough-reset', { method: 'POST' });
-                const data = await res.json();
-                alert(data.message);
-                refreshDatabaseState();
-            } catch (err) {
-                alert('Reset error: ' + err.message);
-            }
-        }
 
         function escapeHtml(str) {
             if (!str) return '';
