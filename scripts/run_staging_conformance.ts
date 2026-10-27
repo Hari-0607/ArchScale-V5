@@ -63,18 +63,24 @@ async function runStagingConformance() {
 
         // 1.2 Portal constraint
         try {
+            await adminClient.query("BEGIN;");
             await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key) VALUES ('Illegal Platform Org', 'platform', 'studio_owner');");
             record(file1, 'enforces organisations.tenant_type_key is NULL iff portal = platform', false);
         } catch (e: any) {
             record(file1, 'enforces organisations.tenant_type_key is NULL iff portal = platform', e.code === '23514');
+        } finally {
+            await adminClient.query("ROLLBACK;").catch(() => {});
         }
 
         // 1.3 Single platform org
         try {
+            await adminClient.query("BEGIN;");
             await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key) VALUES ('Rogue Platform Org 2', 'platform', NULL);");
             record(file1, 'enforces single platform organisation unique index', false);
         } catch (e: any) {
             record(file1, 'enforces single platform organisation unique index', e.code === '23505');
+        } finally {
+            await adminClient.query("ROLLBACK;").catch(() => {});
         }
 
         // 1.4 Users table identity mirror (in public schema)
