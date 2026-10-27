@@ -16,7 +16,7 @@ const DB_NAME = process.env.PGDATABASE || 'archscale_phase1_clean';
 const DEMO_PORT = parseInt(process.env.DEMO_PORT || '3001', 10);
 const DEMO_MODE = process.env.DEMO_MODE === 'true';
 
-// Least-privilege runtime pool for live operations
+// Least-privilege runtime pool for live operations & rule checks
 const pool = new Pool({
     host: DB_HOST,
     port: DB_PORT,
@@ -24,6 +24,16 @@ const pool = new Pool({
     password: DB_PASS,
     database: DB_NAME,
     max: 10
+});
+
+// Admin pool for committed demo onboarding walkthrough (Panel 3)
+const adminPool = new Pool({
+    host: DB_HOST,
+    port: DB_PORT,
+    user: process.env.PGADMIN_USER || 'postgres',
+    password: process.env.PGADMIN_PASSWORD || '',
+    database: DB_NAME,
+    max: 5
 });
 
 // Helper to execute check inside isolated transaction with SAVEPOINT and ALWAYS ROLLBACK
@@ -375,7 +385,7 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        const client = await pool.connect();
+        const client = await adminPool.connect();
         const logs = [];
         const timestamp = Date.now();
         const demoMarker = `DEMO-ORG-${timestamp}`;
