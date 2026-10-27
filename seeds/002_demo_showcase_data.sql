@@ -81,12 +81,12 @@ BEGIN
         SELECT id INTO v_owner_mem FROM memberships WHERE user_id = v_owner_uid AND organisation_id = v_org_id;
 
         -- Workspaces
-        INSERT INTO workspaces (organisation_id, name, description)
-        VALUES (v_org_id, 'Metropolis HQ Studio', 'Core design and structural engineering studio')
+        INSERT INTO workspaces (organisation_id, name, is_default)
+        VALUES (v_org_id, 'Metropolis HQ Studio', true)
         RETURNING id INTO v_ws_id;
 
-        INSERT INTO workspaces (organisation_id, name, description)
-        VALUES (v_org_id, 'Skyline Tower Project', 'High-rise commercial development coordination workspace')
+        INSERT INTO workspaces (organisation_id, name, is_default)
+        VALUES (v_org_id, 'Skyline Tower Project', false)
         RETURNING id INTO v_ws_tower;
 
         -- Team Leader: Elena Rostova
@@ -142,9 +142,9 @@ BEGIN
         -- Populate initial realistic audit records
         INSERT INTO audit_logs (organisation_id, actor_user_id, action, target_entity, target_id, diff)
         VALUES 
-            (v_org_id, v_founder_uid, 'ORGANISATION_APPROVED', 'organisations', v_org_id, '{"portal":"subscriber","tier":"enterprise"}'),
-            (v_org_id, v_owner_uid, 'MEMBERSHIP_APPROVED', 'memberships', v_leader_mem, '{"role":"leader","apps":["app_bim"]}'),
-            (v_org_id, v_owner_uid, 'MEMBERSHIP_APPROVED', 'memberships', v_intern_mem, '{"role":"intern","duration":"90 days"}'),
-            (v_org_id, v_leader_uid, 'CONTEXT_GENERATED', 'access_contexts', v_ctx_id, '{"workspace":"Skyline Tower Project","session":"sess-elena-bim-01"}');
+            (v_org_id, v_founder_uid, 'ORGANISATION_APPROVED', 'organisations', v_org_id::text, '{"portal":"subscriber","tier":"enterprise"}'),
+            (v_org_id, v_owner_uid, 'MEMBERSHIP_APPROVED', 'memberships', v_leader_mem::text, '{"role":"leader","apps":["app_bim"]}'),
+            (v_org_id, v_owner_uid, 'MEMBERSHIP_APPROVED', 'memberships', v_intern_mem::text, '{"role":"intern","duration":"90 days"}'),
+            (v_org_id, v_leader_uid, 'CONTEXT_GENERATED', 'access_contexts', v_ctx_id::text, '{"workspace":"Skyline Tower Project","session":"sess-elena-bim-01"}');
     END IF;
 END $$;
