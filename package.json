@@ -9,6 +9,7 @@
     "test:watch": "vitest",
     "walkthrough": "vitest run scripts/phase1_walkthrough.ts",
     "testbench": "node testbench/server.js",
+    "proof": "node demo/server.js",
     "build": "tsc"
   },
   "keywords": ["auth", "security", "multi-tenant", "rbac", "rls"],

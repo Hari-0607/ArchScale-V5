@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArchScale V05 | Phase 1 Live Proof</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-body: #090D16;
+            --bg-surface: #0F172A;
+            --bg-card: #141E33;
+            --bg-card-subtle: #18233C;
+            --border: rgba(255, 255, 255, 0.08);
+            --border-highlight: rgba(99, 102, 241, 0.35);
+            --text-main: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --accent-primary: #6366F1;
+            --accent-emerald: #10B981;
+            --accent-emerald-bg: rgba(16, 185, 129, 0.12);
+            --accent-ruby: #EF4444;
+            --accent-ruby-bg: rgba(239, 68, 68, 0.14);
+            --accent-amber: #F59E0B;
+            --accent-amber-bg: rgba(245, 158, 11, 0.12);
+            --accent-slate: #64748B;
+            --accent-slate-bg: rgba(100, 116, 139, 0.14);
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            font-size: 13px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            padding-bottom: 60px;
+        }
+
+        /* Mandatory Safety Banner */
+        .mandatory-safety-banner {
+            background: linear-gradient(90deg, #1E1B4B, #0F172A);
+            border-bottom: 1px solid rgba(99, 102, 241, 0.4);
+            color: #C7D2FE;
+            padding: 10px 24px;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            letter-spacing: 0.03em;
+        }
+
+        .mandatory-safety-banner .pill {
+            background: rgba(99, 102, 241, 0.25);
+            border: 1px solid rgba(99, 102, 241, 0.5);
+            padding: 3px 9px;
+            border-radius: 4px;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+
+        /* Top Header */
+        .header {
+            background: rgba(15, 23, 42, 0.9);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 28px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-title-box {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-badge {
+            background: linear-gradient(135deg, #4F46E5, #3B82F6);
+            color: white;
+            font-weight: 800;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+
+        .header-title {
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .header-subtitle {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .role-indicator-badge {
+            background: var(--bg-card);
+            border: 1px solid var(--border-highlight);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--font-mono);
+        }
+
+        .role-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-emerald);
+            box-shadow: 0 0 8px var(--accent-emerald);
+        }
+
+        /* Main Layout */
+        .container {
+            max-width: 1480px;
+            margin: 24px auto;
+            padding: 0 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        /* Panel Container */
+        .panel {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.015);
+        }
+
+        .panel-title {
+            font-size: 15px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .panel-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .panel-body {
+            padding: 20px 24px;
+        }
+
+        /* Buttons */
+        .btn {
+            font-family: var(--font-sans);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-primary), #3B82F6);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.92;
+            transform: translateY(-1px);
+        }
+
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 11px;
+        }
+
+        .btn-outline {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        .btn-outline:hover {
+            border-color: var(--border-highlight);
+            color: var(--text-main);
+        }
+
+        /* Table Styles */
+        .table-wrap {
+            overflow-x: auto;
+        }
+
+        .proof-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            text-align: left;
+        }
+
+        .proof-table th {
+            background: var(--bg-card);
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+
+        .proof-table td {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+
+        .proof-table tr:hover td {
+            background: rgba(255, 255, 255, 0.015);
+        }
+
+        .code-box {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: var(--bg-body);
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.05);
+            max-width: 360px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Status Badges */
+        .status-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .badge-pass {
+            background: var(--accent-emerald-bg);
+            border: 1px solid rgba(16, 185, 129, 0.35);
+            color: var(--accent-emerald);
+        }
+
+        .badge-fail {
+            background: var(--accent-ruby-bg);
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            color: var(--accent-ruby);
+        }
+
+        .badge-notbuilt {
+            background: var(--accent-slate-bg);
+            border: 1px solid rgba(100, 116, 139, 0.35);
+            color: var(--text-muted);
+        }
+
+        .badge-pending {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+        }
+
+        /* PANEL 2: LIVE STATE GRID */
+        .state-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .state-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 16px;
+        }
+
+        .state-card-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .state-pill-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .state-pill {
+            background: var(--bg-body);
+            border: 1px solid var(--border);
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: var(--font-mono);
+        }
+
+        /* PANEL 3: WALKTHROUGH */
+        .walkthrough-stepper {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .walkthrough-step {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+
+        .walkthrough-step.success {
+            border-left: 4px solid var(--accent-emerald);
+        }
+
+        .walkthrough-step.error {
+            border-left: 4px solid var(--accent-ruby);
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        .mono {
+            font-family: var(--font-mono);
+        }
+
+        .spinner {
+            width: 12px;
+            height: 12px;
+            border: 2px solid rgba(255,255,255,0.2);
+            border-left-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Mandatory Top Banner -->
+    <div class="mandatory-safety-banner">
+        <span>⚠️ Database layer only. No login. Local demo database.</span>
+        <span class="pill">Zero-Trust Conformance Harness</span>
+    </div>
+
+    <!-- Header Bar -->
+    <header class="header">
+        <div class="header-title-box">
+            <span class="header-badge">PHASE 1</span>
+            <div>
+                <h1 class="header-title">Phase 1 Live Proof Demo</h1>
+                <div class="header-subtitle">Live PostgreSQL 18 Invariant Rejection Prover & Least-Privilege Harness</div>
+            </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 14px;">
+            <div class="role-indicator-badge">
+                <span class="role-dot"></span>
+                <span>Active DB Role: <strong id="active-db-role">archscale_app_runtime</strong></span>
+            </div>
+            <div class="role-indicator-badge" style="border-color: rgba(255,255,255,0.08);">
+                <span>DB: <strong id="active-db-name">-</strong> (<span id="active-db-port">-</span>)</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+
+        <!-- PANEL 1: RULE CHECKS -->
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Panel 1: Rule Enforcement Checks (14 Rules)</h2>
+                    <div class="panel-desc">Every check executes inside its own transaction with a SAVEPOINT and ALWAYS rolls back. Real database responses only.</div>
+                </div>
+                <button class="btn btn-primary" id="btn-run-all" onclick="runAllChecks()">
+                    <span>▶ Run All 14 Checks</span>
+                </button>
+            </div>
+            <div class="panel-body" style="padding: 0;">
+                <div class="table-wrap">
+                    <table class="proof-table" id="checks-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 40px;">#</th>
+                                <th style="width: 220px;">Rule Name</th>
+                                <th>What Was Attempted</th>
+                                <th>Expected Result</th>
+                                <th>Actual Database Error (SQLSTATE & Message)</th>
+                                <th style="width: 120px;">Status</th>
+                                <th style="width: 70px;">Time</th>
+                                <th style="width: 70px;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="checks-tbody">
+                            <!-- Populated with all 14 rows -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- PANEL 2: LIVE DATABASE STATE -->
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Panel 2: Live Database State</h2>
+                    <div class="panel-desc">Real-time state sampled directly from PostgreSQL tables (Auto-refreshes every 3 seconds)</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--text-muted);">
+                    <span class="role-dot" style="width: 6px; height: 6px;"></span>
+                    <span>Last Refreshed: <strong id="state-last-refreshed" class="mono">-</strong></span>
+                </div>
+            </div>
+            <div class="panel-body">
+                <!-- Counters & State Grid -->
+                <div class="state-grid">
+                    <div class="state-card">
+                        <div class="state-card-label">Organisations by Status</div>
+                        <div class="state-pill-list" id="state-orgs-list">-</div>
+                    </div>
+                    <div class="state-card">
+                        <div class="state-card-label">Memberships by Status</div>
+                        <div class="state-pill-list" id="state-mems-list">-</div>
+                    </div>
+                    <div class="state-card">
+                        <div class="state-card-label">Tenant Types</div>
+                        <div class="state-pill-list" id="state-tenant-types">-</div>
+                    </div>
+                    <div class="state-card">
+                        <div class="state-card-label">Total Immutable Audit Logs</div>
+                        <div style="font-size: 20px; font-weight: 700; color: var(--text-main);" id="state-audit-total">-</div>
+                    </div>
+                </div>
+
+                <!-- Roles Hierarchy Listing -->
+                <div style="margin-bottom: 20px;">
+                    <div class="state-card-label">Platform & Subscriber Roles (Key & Integer Level)</div>
+                    <div class="state-pill-list" id="state-roles-list"></div>
+                </div>
+
+                <!-- 5 Recent Audit Logs -->
+                <div>
+                    <div class="state-card-label">Five Most Recent Audit Entries (Live Feed)</div>
+                    <div class="table-wrap">
+                        <table class="proof-table" style="background: var(--bg-card); border-radius: var(--radius-sm);">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Actor</th>
+                                    <th>Action</th>
+                                    <th>Entity</th>
+                                    <th>Target ID</th>
+                                </tr>
+                            </thead>
+                            <tbody id="state-audit-tbody">
+                                <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Sampling audit stream...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PANEL 3: LIVE WALKTHROUGH -->
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Panel 3: Live Approval Walkthrough</h2>
+                    <div class="panel-desc">Executes the committed happy path + deliberate failure on a dedicated DEMO organisation.</div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-outline btn-sm" onclick="resetWalkthroughData()">Reset Demo Data</button>
+                    <button class="btn btn-primary" id="btn-walkthrough" onclick="runWalkthrough()">
+                        <span>⚡ Run Approval Walkthrough</span>
+                    </button>
+                </div>
+            </div>
+            <div class="panel-body">
+                <div id="demo-mode-warning" style="display: none; background: rgba(245, 158, 11, 0.1); border: 1px solid var(--accent-amber); padding: 12px 16px; border-radius: 6px; color: #FCD34D; font-size: 12px; margin-bottom: 14px;">
+                    <strong>Notice:</strong> Panel 3 is disabled because <code>DEMO_MODE=true</code> environment variable is not active. This panel writes committed records to a dedicated demo organisation.
+                </div>
+
+                <div class="walkthrough-stepper" id="walkthrough-stepper">
+                    <div style="color: var(--text-muted); font-size: 12px;">Click "Run Approval Walkthrough" above to execute the 6-stage lifecycle against the live database.</div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        // Preset check descriptions
+        const CHECKS_CATALOG = [
+            { id: 1, name: "1. Second Platform Org Rejection", attempted: "INSERT INTO organisations with portal='platform'", expected: "Database rejection (23505 unique index or RLS)" },
+            { id: 2, name: "2. UPDATE on audit_logs", attempted: "UPDATE audit_logs SET action='tampered'", expected: "Database rejection (42501 or P0001 immutable trigger)" },
+            { id: 3, name: "3. DELETE on audit_logs", attempted: "DELETE FROM audit_logs", expected: "Database rejection (42501 or P0001 immutable trigger)" },
+            { id: 4, name: "4. TRUNCATE on audit_logs", attempted: "TRUNCATE TABLE audit_logs", expected: "Database rejection (42501 or P0001 truncate trigger)" },
+            { id: 5, name: "5. Membership ACTIVE in Non-ACTIVE Org", attempted: "INSERT ACTIVE membership under APPLIED org", expected: "Database rejection (P0001 trg_memberships_org_active_check)" },
+            { id: 6, name: "6. Remove/Suspend Only Active Founder", attempted: "UPDATE memberships SET status='SUSPENDED' where role='founder'", expected: "Database rejection (P0001 fn_trg_custodian_protection)" },
+            { id: 7, name: "7. Intern Membership With No Expiry", attempted: "INSERT membership role='intern' with expires_at=NULL", expected: "Database rejection (P0001 trg_memberships_expiry_enforcement)" },
+            { id: 8, name: "8. Share Grant With Both Targets Set", attempted: "INSERT share_grants with target_org_id AND target_user_id", expected: "Database rejection (23514 chk_share_grant_target_one)" },
+            { id: 9, name: "9. Support Access With 72-Hour Expiry", attempted: "INSERT support_access_grants with 72h duration", expected: "Database rejection (23514 chk_support_grant_max_24h)" },
+            { id: 10, name: "10. Approve Your Own Request", attempted: "INSERT approval_steps with decided_by == requester", expected: "Database rejection (P0001 trg_approval_step_invariants)" },
+            { id: 11, name: "11. Forged Actor on fn_approve_membership", attempted: "SELECT fn_approve_membership with illegitimate approver UUID", expected: "Database rejection (P0001 approver not found/active)" },
+            { id: 12, name: "12. Org Suspension Exemption & Cascade", attempted: "UPDATE organisations status='SUSPENDED' on org with sole owner", expected: "SUCCESS: Exempt from custodian lock and cascades" },
+            { id: 13, name: "13. RLS Tenant Isolation (No Context)", attempted: "SELECT count(*) FROM workspaces as archscale_app_runtime", expected: "SUCCESS: Returns exactly 0 rows via RLS" },
+            { id: 14, name: "14. Runtime Role Privilege Proof", attempted: "Inspect pg_roles (no superuser/bypassrls) & CREATE TABLE", expected: "Database rejection (42501 permission denied on DDL)" }
+        ];
+
+        let isDemoMode = false;
+
+        // Initialize Table Rows
+        function initChecksTable() {
+            const tbody = document.getElementById('checks-tbody');
+            tbody.innerHTML = CHECKS_CATALOG.map(c => `
+                <tr id="row-check-${c.id}">
+                    <td class="mono">${c.id}</td>
+                    <td style="font-weight: 600;">${c.name}</td>
+                    <td><div class="code-box" title="${c.attempted}">${c.attempted}</div></td>
+                    <td style="color: var(--text-secondary); font-size: 11px;">${c.expected}</td>
+                    <td class="cell-error" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">Pending execution...</td>
+                    <td class="cell-status"><span class="status-badge badge-pending">PENDING</span></td>
+                    <td class="cell-time mono" style="font-size: 11px;">-</td>
+                    <td>
+                        <button class="btn btn-outline btn-sm" onclick="runSingleCheck(${c.id}, this)">▶ Run</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // Fetch Status
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                document.getElementById('active-db-role').textContent = data.currentUser || 'archscale_app_runtime';
+                document.getElementById('active-db-name').textContent = data.database || 'postgres';
+                document.getElementById('active-db-port').textContent = data.port || '5433';
+                isDemoMode = data.demoMode;
+
+                if (!isDemoMode) {
+                    document.getElementById('demo-mode-warning').style.display = 'block';
+                }
+            } catch (err) {
+                console.error('Status fetch failed:', err);
+            }
+        }
+
+        // Run Single Check
+        async function runSingleCheck(id, btn) {
+            const row = document.getElementById(`row-check-${id}`);
+            const cellError = row.querySelector('.cell-error');
+            const cellStatus = row.querySelector('.cell-status');
+            const cellTime = row.querySelector('.cell-time');
+
+            if (btn) btn.disabled = true;
+            cellStatus.innerHTML = '<span class="status-badge badge-pending"><span class="spinner"></span> RUNNING</span>';
+
+            try {
+                const res = await fetch(`/api/check/${id}`, { method: 'POST' });
+                const result = await res.json();
+                renderCheckResult(row, result);
+            } catch (err) {
+                cellError.textContent = err.message;
+                cellStatus.innerHTML = '<span class="status-badge badge-fail">ERROR</span>';
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // Run All Checks
+        async function runAllChecks() {
+            const btn = document.getElementById('btn-run-all');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Running 14 Checks...';
+
+            try {
+                const res = await fetch('/api/check-all', { method: 'POST' });
+                const results = await res.json();
+                results.forEach(result => {
+                    const row = document.getElementById(`row-check-${result.id}`);
+                    renderCheckResult(row, result);
+                });
+            } catch (err) {
+                alert('Run all checks error: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<span>▶ Run All 14 Checks</span>';
+            }
+        }
+
+        function renderCheckResult(row, result) {
+            const cellError = row.querySelector('.cell-error');
+            const cellStatus = row.querySelector('.cell-status');
+            const cellTime = row.querySelector('.cell-time');
+
+            cellTime.textContent = `${result.durationMs}ms`;
+
+            if (result.sqlstate) {
+                cellError.innerHTML = `<span style="color: #F87171;">[${result.sqlstate}]</span> ${escapeHtml(result.message)}`;
+            } else {
+                cellError.innerHTML = `<span style="color: #34D399;">${escapeHtml(result.message)}</span>`;
+            }
+
+            if (result.status === 'PASS') {
+                cellStatus.innerHTML = '<span class="status-badge badge-pass">✓ PASS</span>';
+            } else if (result.status === 'FAIL') {
+                cellStatus.innerHTML = '<span class="status-badge badge-fail">✕ FAIL</span>';
+            } else if (result.status === 'Not built yet') {
+                cellStatus.innerHTML = '<span class="status-badge badge-notbuilt">NOT BUILT YET</span>';
+            } else {
+                cellStatus.innerHTML = `<span class="status-badge badge-fail">${result.status}</span>`;
+            }
+        }
+
+        // Auto-refresh Panel 2 (Every 3 seconds)
+        async function refreshDatabaseState() {
+            try {
+                const res = await fetch('/api/database-state');
+                const data = await res.json();
+
+                document.getElementById('state-last-refreshed').textContent = new Date(data.lastRefreshed).toLocaleTimeString();
+                document.getElementById('state-audit-total').textContent = data.totalAuditLogs;
+
+                // Organisations by status
+                const orgsList = document.getElementById('state-orgs-list');
+                orgsList.innerHTML = data.organisationsByStatus.length > 0 
+                    ? data.organisationsByStatus.map(o => `<span class="state-pill">${o.status}: ${o.count}</span>`).join('')
+                    : '<span style="color: var(--text-muted); font-size: 11px;">0 organisations</span>';
+
+                // Memberships by status
+                const memsList = document.getElementById('state-mems-list');
+                memsList.innerHTML = data.membershipsByStatus.length > 0 
+                    ? data.membershipsByStatus.map(m => `<span class="state-pill">${m.status}: ${m.count}</span>`).join('')
+                    : '<span style="color: var(--text-muted); font-size: 11px;">0 memberships</span>';
+
+                // Tenant types
+                const ttList = document.getElementById('state-tenant-types');
+                ttList.innerHTML = data.tenantTypes.map(t => `<span class="state-pill">${t.key}</span>`).join('');
+
+                // Roles list
+                const rolesList = document.getElementById('state-roles-list');
+                rolesList.innerHTML = data.roles.map(r => `
+                    <span class="state-pill" style="border-color: ${r.portal === 'platform' ? 'rgba(99,102,241,0.3)' : 'rgba(59,130,246,0.3)'}">
+                        ${r.key} <strong style="color: #C7D2FE;">(L${r.level})</strong>
+                    </span>
+                `).join('');
+
+                // 5 Most recent audit logs
+                const auditTbody = document.getElementById('state-audit-tbody');
+                if (data.recentAuditLogs && data.recentAuditLogs.length > 0) {
+                    auditTbody.innerHTML = data.recentAuditLogs.map(a => `
+                        <tr>
+                            <td class="mono" style="font-size: 11px;">${new Date(a.created_at).toLocaleTimeString()}</td>
+                            <td style="font-weight: 500;">${escapeHtml(a.actor)}</td>
+                            <td><span style="font-family: var(--font-mono); color: var(--accent-primary);">${a.action}</span></td>
+                            <td><code>${a.target_entity}</code></td>
+                            <td class="mono" style="font-size: 11px;">${a.target_id.slice(0, 18)}...</td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (err) {
+                console.error('Database state refresh error:', err);
+            }
+        }
+
+        // Panel 3: Walkthrough Runner
+        async function runWalkthrough() {
+            const btn = document.getElementById('btn-walkthrough');
+            const stepper = document.getElementById('walkthrough-stepper');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Running Walkthrough...';
+            stepper.innerHTML = '<div style="color: var(--text-secondary); font-size: 12px;"><span class="spinner"></span> Executing 6-step lifecycle against PostgreSQL...</div>';
+
+            try {
+                const res = await fetch('/api/walkthrough', { method: 'POST' });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    stepper.innerHTML = `<div class="walkthrough-step error"><strong>Error:</strong> ${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+
+                stepper.innerHTML = data.logs.map(l => `
+                    <div class="walkthrough-step ${l.error ? 'error' : 'success'}">
+                        <div>
+                            <strong>Step ${l.step}:</strong> ${escapeHtml(l.action)}
+                            ${l.error ? `<div style="color: #F87171; font-family: var(--font-mono); font-size: 11px; margin-top: 4px;">Verified Rejection: ${escapeHtml(l.error)}</div>` : ''}
+                        </div>
+                        <span class="status-badge ${l.error ? 'badge-fail' : 'badge-pass'}">${l.error ? 'REJECTED' : 'SUCCESS'}</span>
+                    </div>
+                `).join('');
+
+                refreshDatabaseState();
+            } catch (err) {
+                stepper.innerHTML = `<div class="walkthrough-step error">Execution error: ${escapeHtml(err.message)}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<span>⚡ Run Approval Walkthrough</span>';
+            }
+        }
+
+        async function resetWalkthroughData() {
+            try {
+                const res = await fetch('/api/walkthrough-reset', { method: 'POST' });
+                const data = await res.json();
+                alert(data.message);
+                refreshDatabaseState();
+            } catch (err) {
+                alert('Reset error: ' + err.message);
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // Boot
+        initChecksTable();
+        fetchStatus();
+        refreshDatabaseState();
+        setInterval(refreshDatabaseState, 3000);
+    </script>
+</body>
+</html>
