@@ -205,8 +205,8 @@ async function main() {
                         // Verify challenge immediately to complete enrolment
                         const challengeRes = await userClient.auth.mfa.challenge({ factorId: enrollRes.data.id });
                         // Generate valid code for challenge
-                        const { default: otplib } = await import('otplib');
-                        const code = otplib.authenticator.generate(totpSecret);
+                        const { generateTotpCode } = await import('../src/utils/totp.js');
+                        const code = generateTotpCode(totpSecret);
                         await userClient.auth.mfa.verify({
                             factorId: enrollRes.data.id,
                             challengeId: challengeRes.data!.id,
