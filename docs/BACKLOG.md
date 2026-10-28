@@ -19,3 +19,6 @@ Items deferred from Phase 1 close-out and Phase 2 Step 2. Not started unless a l
 
 6. **`user_code` collision retry**  
    `fn_upsert_user_mirror` generates `AS-` + 8 hex chars and inserts without retrying a unique violation on `users.user_code`. Add a bounded retry (or a collision-safe generator) in a later migration.
+
+7. **Member directory (org-wide membership reads)**  
+   Org-wide membership reads need a permission-gated definer function (e.g. `org.members.read`) rather than open or broad table SELECT on `memberships`. Deferred to Step 3.
