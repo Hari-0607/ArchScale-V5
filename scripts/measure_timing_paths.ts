@@ -51,7 +51,11 @@ async function main() {
     // Seed mirror in staging DB
     const adminDb = new pg.Client({ connectionString: config.supabaseDbAdminUrl, ssl: { rejectUnauthorized: false } });
     await adminDb.connect();
-    await adminDb.query(`SELECT fn_upsert_user_mirror($1, $2, $3, NULL);`, [userId, TEST_EMAIL, TEST_USER_CODE]);
+    try {
+        await adminDb.query(`SELECT fn_upsert_user_mirror($1, $2, $3, NULL);`, [userId, TEST_EMAIL, TEST_USER_CODE]);
+    } catch {
+        await adminDb.query(`INSERT INTO public.users (id, email, user_code) VALUES ($1, $2, $3);`, [userId, TEST_EMAIL, TEST_USER_CODE]);
+    }
     await adminDb.end();
 
     console.log('================================================================');

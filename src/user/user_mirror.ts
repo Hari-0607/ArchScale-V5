@@ -50,6 +50,17 @@ export async function resolveUserIdentifier(identifier: string): Promise<string>
         if (email) {
             return email.toLowerCase();
         }
+    } catch {
+        // Fallback for pre-012 environments where fn_resolve_user_code is not yet applied
+        try {
+            const raw = await client.query<{ email: string }>(
+                'SELECT email FROM public.users WHERE lower(user_code) = lower($1) LIMIT 1;',
+                [trimmed]
+            );
+            if (raw.rows.length > 0) {
+                return raw.rows[0].email.toLowerCase();
+            }
+        } catch { /* ignore fallback errors */ }
     } finally {
         client.release();
     }
