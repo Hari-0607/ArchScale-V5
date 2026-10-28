@@ -140,7 +140,7 @@ export class LocalProvider implements IdentityProvider {
 
         // Mirror user identity in database if DB pool is connected
         try {
-            await syncUserMirror(principal, user.userCode);
+            await syncUserMirror(principal);
         } catch {
             // In unit tests without DB, mirror sync can be skipped
         }

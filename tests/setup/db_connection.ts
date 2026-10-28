@@ -71,6 +71,29 @@ export async function createIsolatedTestDatabase(testDbName: string): Promise<pg
         max: 20
     });
 
+    // Ensure archscale_app_runtime role password matches localRuntimePassword
+    await testPool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'archscale_app_runtime') THEN
+                CREATE ROLE archscale_app_runtime WITH LOGIN PASSWORD '${localRuntimePassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+            ELSE
+                ALTER ROLE archscale_app_runtime WITH PASSWORD '${localRuntimePassword}';
+            END IF;
+        END $$;
+    `);
+
+    // Create minimal stand-in auth.users schema & table for local test isolation
+    await testPool.query(`
+        CREATE SCHEMA IF NOT EXISTS auth;
+        CREATE TABLE IF NOT EXISTS auth.users (
+            id UUID PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL
+        );
+        GRANT USAGE ON SCHEMA auth TO archscale_app_runtime;
+        GRANT SELECT ON auth.users TO archscale_app_runtime;
+    `);
+
     const migrationFiles = [
         '001_core_types_and_identities.sql',
         '002_ecosystem_apps_and_entitlements.sql',
