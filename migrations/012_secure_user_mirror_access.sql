@@ -4,17 +4,19 @@
 -- =============================================================================
 -- Purpose
 --   Migration 011 granted the runtime role unrestricted SELECT, INSERT, UPDATE
---   on public.users via USING (true) / WITH CHECK (true).  That violates the
+--   on public.users via USING (true) / WITH CHECK (true). That violates the
 --   least-privilege principle: any connection without a context can enumerate
 --   all emails, and any INSERT/UPDATE is unconstrained.
 --
 --   This migration:
 --     1. Drops users_runtime_policy (the open policy from 011)
---     2. Revokes the direct table privileges on public.users granted in 010/011
+--     2. Revokes direct write privileges on public.users; grants SELECT only so
+--        context-bound RLS can evaluate.
 --     3. Adds fn_resolve_user_code -- SECURITY DEFINER, returns email or NULL
---     4. Adds fn_upsert_user_mirror -- SECURITY DEFINER, creates/updates only
---        id, user_code, email, phone; never roles or tenant data
---     5. Adds a context-bound RLS SELECT-only policy for the runtime role
+--     4. Adds fn_upsert_user_mirror -- SECURITY DEFINER, creates identity record;
+--        on conflict updates phone ONLY (never rewrites email, never writes roles)
+--     5. Adds context-bound RLS SELECT-only policy using safe NULLIF cast on GUC
+--     6. Adds parameterless is_context_valid() helper with safe NULLIF GUC cast
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -34,7 +36,6 @@ END $$;
 
 -- -----------------------------------------------------------------------------
 -- 2. Revoke direct write privileges; grant SELECT so the RLS policy can evaluate.
---    The context-bound RLS policy (Section 5) restricts SELECT to the caller's own row.
 --    Direct INSERT and UPDATE remain completely revoked.
 -- -----------------------------------------------------------------------------
 REVOKE ALL PRIVILEGES ON public.users FROM archscale_app_runtime;
@@ -80,10 +81,11 @@ GRANT  EXECUTE ON FUNCTION fn_resolve_user_code(TEXT) TO archscale_app_runtime;
 -- -----------------------------------------------------------------------------
 -- 4. fn_upsert_user_mirror
 --    Creates or updates the public.users row for a verified principal.
---    Writes ONLY id, user_code, email, phone.  Never writes role_key,
---    organisation_id, or any tenant-scoped column.
---    The ON CONFLICT path is scoped to the row whose id = p_id,
---    preventing cross-principal overwrites.
+--    On insert: writes id, user_code, email, phone.
+--    On conflict (id): updates phone and updated_at ONLY.
+--    p_email is NEVER updated on conflict -- preventing callers from rewriting
+--    an existing user's email.
+--    Never writes roles or tenant data (public.users has no such columns).
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_upsert_user_mirror(
     p_id        UUID,
@@ -124,10 +126,9 @@ BEGIN
     INSERT INTO public.users (id, user_code, email, phone)
     VALUES (p_id, v_code, lower(trim(p_email)), p_phone)
     ON CONFLICT (id) DO UPDATE
-        SET email      = lower(trim(EXCLUDED.email)),
-            phone      = COALESCE(EXCLUDED.phone, public.users.phone),
+        SET phone      = COALESCE(EXCLUDED.phone, public.users.phone),
             updated_at = now()
-        WHERE public.users.id = p_id;  -- scoped to this principal's row only
+        WHERE public.users.id = p_id;  -- email is NOT updated; remains immutable on conflict
 
     RETURN QUERY
         SELECT u.id, u.user_code::TEXT, u.email, u.created_at, u.updated_at
@@ -140,14 +141,30 @@ REVOKE EXECUTE ON FUNCTION fn_upsert_user_mirror(UUID, TEXT, TEXT, TEXT) FROM PU
 GRANT  EXECUTE ON FUNCTION fn_upsert_user_mirror(UUID, TEXT, TEXT, TEXT) TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 5. Context-bound SELECT policy for public.users
+-- 5. Parameterless is_context_valid() helper with safe NULLIF GUC cast
+--    Avoids invalid input syntax for type uuid: "" when GUC is empty string.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION is_context_valid()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(
+        is_context_valid(NULLIF(current_setting('archscale.current_context_id', true), '')::uuid),
+        false
+    );
+$$;
+
+REVOKE EXECUTE ON FUNCTION is_context_valid() FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION is_context_valid() TO archscale_app_runtime;
+
+-- -----------------------------------------------------------------------------
+-- 6. Context-bound SELECT policy for public.users
 --
 --    The runtime role may SELECT only the row whose id is the user_id of
---    the currently validated access_context.  is_context_valid() is called
+--    the currently validated access_context. is_context_valid() is called
 --    every time the policy fires -- no GUC is trusted on its own.
---
---    INSERT and UPDATE are not in this policy; they must go through
---    fn_upsert_user_mirror (SECURITY DEFINER) which bypasses RLS as definer.
+--    Uses NULLIF(current_setting(...), '')::uuid to safely handle empty string GUC.
 -- -----------------------------------------------------------------------------
 DO $$
 BEGIN
@@ -164,7 +181,7 @@ BEGIN
                 id = (
                     SELECT ac.user_id
                     FROM access_contexts ac
-                    WHERE ac.id = current_setting('archscale.current_context_id', true)::uuid
+                    WHERE ac.id = NULLIF(current_setting('archscale.current_context_id', true), '')::uuid
                       AND is_context_valid(ac.id)
                     LIMIT 1
                 )
