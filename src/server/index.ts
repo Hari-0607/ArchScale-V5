@@ -439,3 +439,19 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
         }
     });
 }
+
+// Auto-start server when run directly as CLI entrypoint
+const isMain = process.argv[1] && (
+    process.argv[1].endsWith('src/server/index.ts') ||
+    process.argv[1].endsWith('src\\server\\index.ts') ||
+    process.argv[1].endsWith('server.ts')
+);
+
+if (isMain) {
+    const port = parseInt(process.env.PORT || '3000', 10);
+    const host = '127.0.0.1';
+    const server = createServer();
+    server.listen(port, host, () => {
+        console.log(`[ArchScale Server] Listening on http://${host}:${port} (Demo mode: ${process.env.ARCHSCALE_DEMO === 'true'})`);
+    });
+}

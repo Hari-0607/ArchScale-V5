@@ -1,0 +1,84 @@
+### Variables
+@baseUrl = http://127.0.0.1:3000
+
+### 1. Public Sign-in (Password Authentication)
+# @name signin
+POST {{baseUrl}}/api/session/sign-in
+Content-Type: application/json
+
+{
+    "email": "TEST-owner@archscale.test",
+    "password": "Password123!"
+}
+
+### Store token from signin response
+@accessToken = {{signin.response.body.accessToken}}
+
+### 2. MFA Verify (Upgrade to AAL2 using TOTP code)
+# @name mfaVerify
+POST {{baseUrl}}/api/session/mfa/verify
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+    "code": "123456"
+}
+
+### Store upgraded AAL2 token
+@aal2Token = {{mfaVerify.response.body.accessToken}}
+
+### 3. List Memberships (Pre-Context)
+# @name memberships
+GET {{baseUrl}}/api/session/memberships
+Authorization: Bearer {{aal2Token}}
+
+### 4. List Workspaces for Selected Organisation
+# @name workspaces
+GET {{baseUrl}}/api/session/workspaces?organisationId={{memberships.response.body.memberships[0].organisation_id}}
+Authorization: Bearer {{aal2Token}}
+
+### 5. Create 24h Access Context
+# @name createContext
+POST {{baseUrl}}/api/session/context
+Content-Type: application/json
+Authorization: Bearer {{aal2Token}}
+
+{
+    "organisationId": "{{memberships.response.body.memberships[0].organisation_id}}",
+    "workspaceId": "{{workspaces.response.body.workspaces[0].workspace_id}}"
+}
+
+### Store context ID
+@contextId = {{createContext.response.body.context.contextId}}
+
+### 6. Call /api/me (Context-bound session endpoint)
+GET {{baseUrl}}/api/me
+Authorization: Bearer {{aal2Token}}
+X-ArchScale-Context: {{contextId}}
+
+### 7. Call Protected Member List
+GET {{baseUrl}}/api/org/members
+Authorization: Bearer {{aal2Token}}
+X-ArchScale-Context: {{contextId}}
+
+### 8. Call Protected Member Invitation (Mutation)
+POST {{baseUrl}}/api/org/invitations
+Content-Type: application/json
+Authorization: Bearer {{aal2Token}}
+X-ArchScale-Context: {{contextId}}
+
+{
+    "email": "invitee@archscale.test",
+    "roleKey": "leader"
+}
+
+### 9. Renew Context (Extends up to 24h hard cap)
+POST {{baseUrl}}/api/session/context/renew
+Content-Type: application/json
+Authorization: Bearer {{aal2Token}}
+X-ArchScale-Context: {{contextId}}
+
+### 10. Logout (Revokes session token and context)
+POST {{baseUrl}}/api/session/logout
+Authorization: Bearer {{aal2Token}}
+X-ArchScale-Context: {{contextId}}
