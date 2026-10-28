@@ -81,17 +81,26 @@ GRANT  EXECUTE ON FUNCTION fn_resolve_user_code(TEXT) TO archscale_app_runtime;
 -- -----------------------------------------------------------------------------
 -- 4. fn_upsert_user_mirror
 --    Creates or updates the public.users row for a verified principal.
---    On insert: writes id, user_code, email, phone.
---    On conflict (id): updates phone and updated_at ONLY.
---    p_email is NEVER updated on conflict -- preventing callers from rewriting
---    an existing user's email.
---    Never writes roles or tenant data (public.users has no such columns).
+--    NOTE ON RLS AND SECURITY DEFINER:
+--    Because FORCE ROW LEVEL SECURITY is enabled on public.users, these
+--    SECURITY DEFINER functions rely on the defining owner (postgres) bypassing
+--    RLS via the BYPASSRLS role attribute. When called by archscale_app_runtime
+--    (which has NOBYPASSRLS), the function executes with the privileges and
+--    RLS bypass authority of the owner.
+--
+--    Privilege constraints:
+--    - Runtime role cannot choose user_code; generated server-side.
+--    - Seeds and admin tests set specific user codes via admin connection.
+--    - If auth.users exists, requires p_id exists there with matching email.
+--    - On conflict (id): updates phone and updated_at ONLY.
+--    - p_email and user_code are NEVER updated on conflict.
 -- -----------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS fn_upsert_user_mirror(UUID, TEXT, TEXT, TEXT);
+
 CREATE OR REPLACE FUNCTION fn_upsert_user_mirror(
-    p_id        UUID,
-    p_email     TEXT,
-    p_user_code TEXT DEFAULT NULL,
-    p_phone     TEXT DEFAULT NULL
+    p_id    UUID,
+    p_email TEXT,
+    p_phone TEXT DEFAULT NULL
 )
 RETURNS TABLE (
     id         UUID,
@@ -107,6 +116,8 @@ AS $$
 #variable_conflict use_column
 DECLARE
     v_code TEXT;
+    v_auth_email TEXT;
+    v_email_owner UUID;
 BEGIN
     IF p_id IS NULL THEN
         RAISE EXCEPTION 'fn_upsert_user_mirror: p_id must not be NULL'
@@ -118,17 +129,44 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    v_code := COALESCE(
-        NULLIF(trim(p_user_code), ''),
-        'AS-' || upper(substring(encode(gen_random_bytes(4), 'hex'), 1, 8))
-    );
+    -- If auth.users exists (Supabase staging or local test stand-in), enforce identity integrity:
+    -- 1. p_id must exist in auth.users
+    -- 2. p_email must match the email in auth.users
+    -- 3. p_email cannot belong to another user in auth.users
+    IF to_regclass('auth.users') IS NOT NULL THEN
+        EXECUTE 'SELECT email FROM auth.users WHERE id = $1'
+        INTO v_auth_email
+        USING p_id;
+
+        IF v_auth_email IS NULL THEN
+            RAISE EXCEPTION 'fn_upsert_user_mirror: p_id % does not exist in auth.users', p_id
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF lower(trim(v_auth_email)) <> lower(trim(p_email)) THEN
+            RAISE EXCEPTION 'fn_upsert_user_mirror: email mismatch with auth.users for p_id %', p_id
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        EXECUTE 'SELECT id FROM auth.users WHERE lower(trim(email)) = lower(trim($1)) AND id <> $2 LIMIT 1'
+        INTO v_email_owner
+        USING p_email, p_id;
+
+        IF v_email_owner IS NOT NULL THEN
+            RAISE EXCEPTION 'fn_upsert_user_mirror: email % belongs to another user in auth.users', p_email
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    -- Generate server-side user code (runtime role cannot supply or manipulate this)
+    v_code := 'AS-' || upper(substring(encode(gen_random_bytes(4), 'hex'), 1, 8));
 
     INSERT INTO public.users (id, user_code, email, phone)
     VALUES (p_id, v_code, lower(trim(p_email)), p_phone)
     ON CONFLICT (id) DO UPDATE
         SET phone      = COALESCE(EXCLUDED.phone, public.users.phone),
             updated_at = now()
-        WHERE public.users.id = p_id;  -- email is NOT updated; remains immutable on conflict
+        WHERE public.users.id = p_id;  -- email and user_code remain immutable on conflict
 
     RETURN QUERY
         SELECT u.id, u.user_code::TEXT, u.email, u.created_at, u.updated_at
@@ -137,8 +175,8 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION fn_upsert_user_mirror(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
-GRANT  EXECUTE ON FUNCTION fn_upsert_user_mirror(UUID, TEXT, TEXT, TEXT) TO archscale_app_runtime;
+REVOKE EXECUTE ON FUNCTION fn_upsert_user_mirror(UUID, TEXT, TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_upsert_user_mirror(UUID, TEXT, TEXT) TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
 -- 5. Parameterless is_context_valid() helper with safe NULLIF GUC cast

@@ -84,7 +84,7 @@ export class SupabaseProvider implements IdentityProvider {
             const principal = await this.verify(data.session.access_token);
 
             // Sync user identity mirror (public.users)
-            await syncUserMirror(principal, credentials.userCode);
+            await syncUserMirror(principal);
 
             return {
                 accessToken: data.session.access_token,

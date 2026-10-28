@@ -79,7 +79,7 @@ export async function resolveUserIdentifier(identifier: string): Promise<string>
  */
 export async function syncUserMirror(
     principal: VerifiedPrincipal,
-    customUserCode?: string
+    phone?: string
 ): Promise<UserRecord> {
     const client = await runtimePool.connect();
     try {
@@ -90,11 +90,11 @@ export async function syncUserMirror(
             created_at: Date;
             updated_at: Date;
         }>(
-            `SELECT * FROM fn_upsert_user_mirror($1, $2, $3, NULL);`,
+            `SELECT * FROM fn_upsert_user_mirror($1, $2, $3);`,
             [
                 principal.id,
                 principal.email.toLowerCase(),
-                customUserCode ?? null
+                phone ?? null
             ]
         );
 
