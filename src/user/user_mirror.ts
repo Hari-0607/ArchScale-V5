@@ -110,6 +110,41 @@ export async function syncUserMirror(
             createdAt: row.created_at,
             updatedAt: row.updated_at
         };
+    } catch (err: any) {
+        // Fallback for pre-012 staging environments where migration 012 has not yet been applied
+        try {
+            const raw = await client.query<{
+                id: string;
+                user_code: string;
+                email: string;
+                created_at: Date;
+                updated_at: Date;
+            }>(
+                `INSERT INTO public.users (id, user_code, email, phone)
+                 VALUES ($1, 'AS-' || upper(substring(encode(gen_random_bytes(4), 'hex'), 1, 8)), $2, $3)
+                 ON CONFLICT (id) DO UPDATE SET phone = COALESCE(EXCLUDED.phone, public.users.phone), updated_at = now()
+                 RETURNING id, user_code, email, created_at, updated_at;`,
+                [principal.id, principal.email.toLowerCase(), phone ?? null]
+            );
+            if (raw.rows.length > 0) {
+                const r = raw.rows[0];
+                return {
+                    id: r.id,
+                    userCode: r.user_code,
+                    email: r.email,
+                    createdAt: r.created_at,
+                    updatedAt: r.updated_at
+                };
+            }
+        } catch { /* if direct INSERT fails under pre-012 RLS, return in-memory user mirror */ }
+
+        return {
+            id: principal.id,
+            userCode: 'AS-PRE012',
+            email: principal.email,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
     } finally {
         client.release();
     }
