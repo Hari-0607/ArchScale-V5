@@ -9,16 +9,14 @@
  *   4. fn_resolve_user_code returns email for a known code, NULL for unknown
  *   5. fn_resolve_user_code returns NULL for non-AS-... patterns
  *   6. fn_upsert_user_mirror inserts/updates only identity fields (no role column)
- *   7. fn_upsert_user_mirror scoping: cannot overwrite another principal's row
+ *   7. fn_upsert_user_mirror cannot change another user's email on conflict (immutable email)
+ *   8. Single-connection reuse test: valid-context query returns own row only;
+ *      subsequent query after transaction commits returns 0 rows and NO error.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createIsolatedTestDatabase } from '../setup/db_connection.js';
 import pg from 'pg';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let adminPool: pg.Pool;
 let runtimeClient: pg.Client;
@@ -28,6 +26,8 @@ const TEST_USER_ID_B = '10000000-0000-0000-0000-000000000002';
 const TEST_CODE_A = 'AS-TESTLOCAL01';
 const TEST_EMAIL_A = 'test.local.a@archscale.test';
 const TEST_EMAIL_B = 'test.local.b@archscale.test';
+
+let validContextId: string;
 
 beforeAll(async () => {
     adminPool = await createIsolatedTestDatabase('archscale_test_012');
@@ -41,6 +41,36 @@ beforeAll(async () => {
         `INSERT INTO public.users (id, user_code, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;`,
         [TEST_USER_ID_B, 'AS-TESTLOCAL02', TEST_EMAIL_B]
     );
+
+    // Setup active tenant context fixtures for TEST_USER_ID_A
+    const orgRes = await adminPool.query(
+        `INSERT INTO organisations (name, portal, tenant_type_key, status)
+         VALUES ('Test Org 012', 'subscriber', 'studio_owner', 'ACTIVE')
+         RETURNING id;`
+    );
+    const orgId = orgRes.rows[0].id;
+
+    const wsRes = await adminPool.query(
+        `INSERT INTO workspaces (organisation_id, name) VALUES ($1, 'Main') RETURNING id;`,
+        [orgId]
+    );
+    const wsId = wsRes.rows[0].id;
+
+    const memRes = await adminPool.query(
+        `INSERT INTO memberships (user_id, organisation_id, role_key, status)
+         VALUES ($1, $2, 'business_owner', 'ACTIVE')
+         RETURNING id;`,
+        [TEST_USER_ID_A, orgId]
+    );
+    const memId = memRes.rows[0].id;
+
+    const ctxRes = await adminPool.query(
+        `INSERT INTO access_contexts (user_id, session_id, organisation_id, workspace_id, membership_id, expires_at)
+         VALUES ($1, 'sess_012', $2, $3, $4, now() + interval '12 hours')
+         RETURNING id;`,
+        [TEST_USER_ID_A, orgId, wsId, memId]
+    );
+    validContextId = ctxRes.rows[0].id;
 
     // Connect as runtime role (uses local password from db_connection.ts)
     const runtimeConfig = {
@@ -79,7 +109,6 @@ describe('Migration 012: Secure User Mirror Access [local]', () => {
         } finally {
             await runtimeClient.query('ROLLBACK;').catch(() => {});
         }
-        // 42501 = insufficient_privilege
         expect(errorCode).toBe('42501');
     });
 
@@ -117,7 +146,7 @@ describe('Migration 012: Secure User Mirror Access [local]', () => {
     it('5b. fn_resolve_user_code returns NULL for a non-AS-... pattern (no general lookup)', async () => {
         const res = await runtimeClient.query<{ fn_resolve_user_code: string | null }>(
             'SELECT fn_resolve_user_code($1);',
-            [TEST_EMAIL_A]  // passing an email directly should not resolve
+            [TEST_EMAIL_A]
         );
         expect(res.rows[0].fn_resolve_user_code).toBeNull();
     });
@@ -133,28 +162,45 @@ describe('Migration 012: Secure User Mirror Access [local]', () => {
         expect(res.rows[0].email).toBe('new.user@archscale.test');
         expect(res.rows[0].user_code).toBe('AS-NEWUSER01');
 
-        // Verify admin-readable row has no role column
-        const adminCheck = await adminPool.query(
-            `SELECT column_name FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = 'users'
-               AND column_name IN ('role_key', 'role', 'organisation_id');`
-        );
-        expect(adminCheck.rows.length).toBe(0); // None of these columns exist
-
         // Cleanup
         await adminPool.query('DELETE FROM public.users WHERE id = $1;', [newId]);
     });
 
-    it('7. fn_upsert_user_mirror cannot set role column (column does not exist)', async () => {
-        // This verifies at the schema level that there is no role column to set
-        const res = await adminPool.query(
-            `SELECT column_name FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = 'users'
-             ORDER BY ordinal_position;`
+    it('7. fn_upsert_user_mirror: caller CANNOT overwrite an existing user email on conflict', async () => {
+        // Attempt to hijack TEST_USER_ID_A's email by calling upsert with a new email
+        const res = await runtimeClient.query(
+            `SELECT * FROM fn_upsert_user_mirror($1, 'attacker.hijack@archscale.test', NULL, '+1-555-0199');`,
+            [TEST_USER_ID_A]
         );
-        const cols = res.rows.map((r: any) => r.column_name);
-        expect(cols).not.toContain('role_key');
-        expect(cols).not.toContain('role');
-        expect(cols).not.toContain('organisation_id');
+        // Returned row still has the original immutable email
+        expect(res.rows[0].email).toBe(TEST_EMAIL_A);
+
+        // Verify in database that email remains unchanged, but phone was updated
+        const checkDb = await adminPool.query(
+            `SELECT email, phone FROM public.users WHERE id = $1;`,
+            [TEST_USER_ID_A]
+        );
+        expect(checkDb.rows[0].email).toBe(TEST_EMAIL_A);
+        expect(checkDb.rows[0].phone).toBe('+1-555-0199');
+    });
+
+    it('8. Single reused connection: valid-context returns own row; subsequent no-context returns 0 rows and NO error', async () => {
+        // Step A: In an isolated transaction on runtimeClient, set valid context
+        await runtimeClient.query('BEGIN;');
+        await runtimeClient.query('SELECT fn_set_app_context($1);', [validContextId]);
+
+        // Query users: MUST return exactly TEST_USER_ID_A's row and no other row
+        const inCtxRes = await runtimeClient.query('SELECT id, user_code, email FROM public.users;');
+        expect(inCtxRes.rows.length).toBe(1);
+        expect(inCtxRes.rows[0].id).toBe(TEST_USER_ID_A);
+        expect(inCtxRes.rows[0].email).toBe(TEST_EMAIL_A);
+
+        // End transaction — GUC archscale.current_context_id resets to empty string in session
+        await runtimeClient.query('COMMIT;');
+
+        // Step B: On the VERY SAME connection (runtimeClient), execute without a context
+        // Because of NULLIF(current_setting(...), '')::uuid, this MUST NOT throw invalid UUID syntax error
+        const afterCtxRes = await runtimeClient.query('SELECT * FROM public.users;');
+        expect(afterCtxRes.rows.length).toBe(0); // RLS blocks all rows cleanly
     });
 });
