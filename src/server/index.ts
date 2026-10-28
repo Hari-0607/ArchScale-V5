@@ -52,7 +52,9 @@ function readBody(req: http.IncomingMessage, maxSize: number = 100 * 1024): Prom
         req.on('data', chunk => {
             size += chunk.length;
             if (size > maxSize) {
-                reject(new Error('PAYLOAD_TOO_LARGE'));
+                const err = new Error('PAYLOAD_TOO_LARGE');
+                (err as any).statusCode = 413;
+                reject(err);
                 req.destroy();
                 return;
             }
@@ -122,7 +124,10 @@ export function createServer() {
                 let body: any;
                 try {
                     body = await readBody(req);
-                } catch {
+                } catch (err: any) {
+                    if (err.statusCode === 413) {
+                        return sendJson(res, 413, { error: 'PAYLOAD_TOO_LARGE' });
+                    }
                     return sendJson(res, 400, { error: 'INVALID_REQUEST' });
                 }
 
