@@ -116,3 +116,4 @@ export const ROUTE_PERMISSIONS: Record<string, RoutePermission> = {
         portal: 'subscriber'
     }
 };
+
