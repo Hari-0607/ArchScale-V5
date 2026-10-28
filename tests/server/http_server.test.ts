@@ -484,7 +484,7 @@ describe('HTTP Server Integration Tests (LocalProvider)', () => {
             })
         });
         const ctxAal2Data = await ctxAal2Res.json();
-        const ctxAal2Id = ctxAal2Data.context.id;
+        const ctxAal2Id = ctxAal2Data.context.contextId;
 
         // Founder at aal2 calls platform route: ALLOWED (200)
         const platAllowRes = await fetch(`${baseUrl}/api/platform/organisations`, {
