@@ -154,37 +154,70 @@ describe('Migration 012: Secure User Mirror Access [local]', () => {
         expect(res.rows[0].fn_resolve_user_code).toBeNull();
     });
 
-    it('6. fn_upsert_user_mirror inserts identity fields only — no role column possible', async () => {
+    it('6. fn_upsert_user_mirror inserts identity fields with server-generated user_code', async () => {
         const newId = '30000000-0000-0000-0000-000000000003';
+        // Register newId in auth.users first
+        await adminPool.query('INSERT INTO auth.users (id, email) VALUES ($1, $2);', [newId, 'new.user@archscale.test']);
+
         const res = await runtimeClient.query(
-            `SELECT * FROM fn_upsert_user_mirror($1, $2, $3, NULL);`,
-            [newId, 'new.user@archscale.test', 'AS-NEWUSER01']
+            `SELECT * FROM fn_upsert_user_mirror($1, $2);`,
+            [newId, 'new.user@archscale.test']
         );
         expect(res.rows.length).toBe(1);
         expect(res.rows[0].id).toBe(newId);
         expect(res.rows[0].email).toBe('new.user@archscale.test');
-        expect(res.rows[0].user_code).toBe('AS-NEWUSER01');
+        expect(res.rows[0].user_code).toMatch(/^AS-[A-F0-9]{8}$/);
 
         // Cleanup
         await adminPool.query('DELETE FROM public.users WHERE id = $1;', [newId]);
+        await adminPool.query('DELETE FROM auth.users WHERE id = $1;', [newId]);
     });
 
     it('7. fn_upsert_user_mirror: caller CANNOT overwrite an existing user email on conflict', async () => {
-        // Attempt to hijack TEST_USER_ID_A's email by calling upsert with a new email
-        const res = await runtimeClient.query(
-            `SELECT * FROM fn_upsert_user_mirror($1, 'attacker.hijack@archscale.test', NULL, '+1-555-0199');`,
-            [TEST_USER_ID_A]
-        );
-        // Returned row still has the original immutable email
-        expect(res.rows[0].email).toBe(TEST_EMAIL_A);
+        // Attempt to hijack TEST_USER_ID_A's email by calling upsert with a mismatched email
+        await expect(
+            runtimeClient.query(
+                `SELECT * FROM fn_upsert_user_mirror($1, 'attacker.hijack@archscale.test', '+1-555-0199');`,
+                [TEST_USER_ID_A]
+            )
+        ).rejects.toThrow(/email mismatch with auth\.users/);
 
-        // Verify in database that email remains unchanged, but phone was updated
+        // Valid upsert with matching email updates phone only; email and user_code remain immutable
+        const res = await runtimeClient.query(
+            `SELECT * FROM fn_upsert_user_mirror($1, $2, '+1-555-0199');`,
+            [TEST_USER_ID_A, TEST_EMAIL_A]
+        );
+        expect(res.rows[0].email).toBe(TEST_EMAIL_A);
+        expect(res.rows[0].user_code).toBe(TEST_CODE_A);
+
         const checkDb = await adminPool.query(
-            `SELECT email, phone FROM public.users WHERE id = $1;`,
+            `SELECT email, user_code, phone FROM public.users WHERE id = $1;`,
             [TEST_USER_ID_A]
         );
         expect(checkDb.rows[0].email).toBe(TEST_EMAIL_A);
+        expect(checkDb.rows[0].user_code).toBe(TEST_CODE_A);
         expect(checkDb.rows[0].phone).toBe('+1-555-0199');
+    });
+
+    it('7b. fn_upsert_user_mirror: an id not in auth.users is rejected', async () => {
+        const unauthId = '70000000-0000-0000-0000-000000000007';
+        await expect(
+            runtimeClient.query('SELECT * FROM fn_upsert_user_mirror($1, $2);', [unauthId, 'ghost@archscale.test'])
+        ).rejects.toThrow(/does not exist in auth\.users/);
+    });
+
+    it('7c. fn_upsert_user_mirror: email cannot be taken for another id', async () => {
+        const idC = '80000000-0000-0000-0000-000000000008';
+        // Add idC to auth.users with its own email
+        await adminPool.query('INSERT INTO auth.users (id, email) VALUES ($1, $2);', [idC, 'other.user@archscale.test']);
+
+        // Now attempt to upsert idC with TEST_EMAIL_A (which belongs to TEST_USER_ID_A in auth.users)
+        await expect(
+            runtimeClient.query('SELECT * FROM fn_upsert_user_mirror($1, $2);', [idC, TEST_EMAIL_A])
+        ).rejects.toThrow(/email mismatch with auth\.users|belongs to another user/);
+
+        // Cleanup
+        await adminPool.query('DELETE FROM auth.users WHERE id = $1;', [idC]);
     });
 
     it('8. Single reused connection: valid-context returns own row; subsequent no-context returns 0 rows and NO error', async () => {
