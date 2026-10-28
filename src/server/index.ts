@@ -183,7 +183,15 @@ export function createServer() {
 
             // POST /api/session/context
             if (pathname === '/api/session/context' && method === 'POST') {
-                const body = await readBody(req);
+                let body: any;
+                try {
+                    body = await readBody(req);
+                } catch (err: any) {
+                    if (err.statusCode === 413) {
+                        return sendJson(res, 413, { error: 'PAYLOAD_TOO_LARGE' });
+                    }
+                    return sendJson(res, 400, { error: 'INVALID_REQUEST' });
+                }
                 try {
                     const context = await createAccessContext({
                         userId: principal.id,
@@ -237,9 +245,29 @@ export function createServer() {
             return await withAppContext(contextId, principal.id, principal.sessionId, async client => {
                 // GET /api/me
                 if (pathname === '/api/me' && method === 'GET') {
-                    const decision = await decide(client, principal, contextId, 'org.members.read');
-                    if (!decision.allow) {
-                        return sendJson(res, 403, { decision });
+                    // /api/me requires only a valid context, no specific route permission
+                    const ctxQuery = await client.query(`
+                        SELECT 
+                            ac.id AS context_id,
+                            ac.user_id,
+                            ac.organisation_id,
+                            o.name AS organisation_name,
+                            o.portal,
+                            o.tenant_type_key,
+                            ac.workspace_id,
+                            w.name AS workspace_name,
+                            m.role_key,
+                            ac.aal_level AS aal,
+                            ac.expires_at
+                        FROM public.access_contexts ac
+                        JOIN public.organisations o ON o.id = ac.organisation_id
+                        JOIN public.workspaces w ON w.id = ac.workspace_id
+                        JOIN public.memberships m ON m.id = ac.membership_id
+                        WHERE ac.id = $1::uuid;
+                    `, [contextId]);
+                    const ctxRow = ctxQuery.rows[0];
+                    if (!ctxRow) {
+                        return sendJson(res, 403, { error: 'AUTH_CONTEXT_INVALID' });
                     }
                     return sendJson(res, 200, {
                         principal: {
@@ -248,15 +276,15 @@ export function createServer() {
                             aal: principal.aal
                         },
                         context: {
-                            contextId: decision.contextId,
-                            organisationId: decision.organisationId,
-                            organisationName: decision.organisationName,
-                            workspaceId: decision.workspaceId,
-                            workspaceName: decision.workspaceName,
-                            roleKey: decision.roleKey,
-                            portal: decision.portal,
-                            tenantTypeKey: decision.tenantTypeKey,
-                            expiresAt: decision.expiresAt
+                            contextId: ctxRow.context_id,
+                            organisationId: ctxRow.organisation_id,
+                            organisationName: ctxRow.organisation_name,
+                            workspaceId: ctxRow.workspace_id,
+                            workspaceName: ctxRow.workspace_name,
+                            roleKey: ctxRow.role_key,
+                            portal: ctxRow.portal,
+                            tenantTypeKey: ctxRow.tenant_type_key,
+                            expiresAt: ctxRow.expires_at
                         }
                     });
                 }

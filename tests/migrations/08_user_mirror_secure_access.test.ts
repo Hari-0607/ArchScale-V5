@@ -241,9 +241,9 @@ describe('Migration 012: Secure User Mirror Access [local]', () => {
     });
 
     it('8. Single reused connection: valid-context returns own row; subsequent no-context returns 0 rows and NO error', async () => {
-        // Step A: In an isolated transaction on runtimeClient, set valid context
+        // Step A: In an isolated transaction on runtimeClient, set valid context (3 arguments per Phase 2 design)
         await runtimeClient.query('BEGIN;');
-        await runtimeClient.query('SELECT fn_set_app_context($1);', [validContextId]);
+        await runtimeClient.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [validContextId, TEST_USER_ID_A, 'sess_012']);
 
         // Query users: MUST return exactly TEST_USER_ID_A's row and no other row
         const inCtxRes = await runtimeClient.query('SELECT id, user_code, email FROM public.users;');

@@ -10,6 +10,8 @@
     "walkthrough": "vitest run scripts/phase1_walkthrough.ts",
     "testbench": "node testbench/server.js",
     "proof": "node demo/server.js",
+    "server": "node -e \"import('./dist/server/index.js').then(m => m.createServer().listen(3000, '127.0.0.1', () => console.log('Listening on http://127.0.0.1:3000')))\"",
+    "dev:server": "tsx -e \"import('./src/server/index.js').then(m => m.createServer().listen(3000, '127.0.0.1', () => console.log('Listening on http://127.0.0.1:3000')))\"",
     "build": "tsc"
   },
   "keywords": [
