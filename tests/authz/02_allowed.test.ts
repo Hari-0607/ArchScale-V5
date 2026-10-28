@@ -368,7 +368,7 @@ describe('02_allowed: Verification of Allowed Authorization Paths and Scopes', (
         const client = await adminPool.connect();
         try {
             const { ROUTE_PERMISSIONS } = await import('../../src/config/route_permissions.js');
-            const routePermKeys = Array.from(new Set(Object.values(ROUTE_PERMISSIONS)));
+            const routePermKeys = Array.from(new Set(Object.values(ROUTE_PERMISSIONS).map(rp => rp.permission)));
 
             const res = await client.query<{ key: string; role_count: string }>(`
                 SELECT p.key, COUNT(rp.role_key) AS role_count
