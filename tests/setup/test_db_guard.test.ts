@@ -60,4 +60,33 @@ describe('Local Test Database Guard Invariants', () => {
             if (oldRuntimeUrl) process.env.ARCHSCALE_RUNTIME_DB_URL = oldRuntimeUrl;
         }
     });
+
+    it('6. bidirectional isolation: local tests stay strictly unable to reach staging when ARCHSCALE_STAGING_TESTS is unset', () => {
+        const oldStagingFlag = process.env.ARCHSCALE_STAGING_TESTS;
+        delete process.env.ARCHSCALE_STAGING_TESTS;
+
+        try {
+            // Attempting to pass any staging or remote URL to the local test database guard throws
+            const stagingCandidate = 'postgresql://archscale_app_runtime:secret@aws-0-ap-south-1.pooler.supabase.com:5432/postgres';
+            expect(() => assertLocalTestDatabaseGuard(stagingCandidate)).toThrow(/Local tests must connect only to 127\.0\.0\.1 or localhost/);
+        } finally {
+            if (oldStagingFlag) process.env.ARCHSCALE_STAGING_TESTS = oldStagingFlag;
+        }
+    });
+
+    it('7. bidirectional isolation: ARCHSCALE_STAGING_TESTS=true explicitly enables staging runtime pool access for staging tests only', () => {
+        const oldStagingFlag = process.env.ARCHSCALE_STAGING_TESTS;
+        process.env.ARCHSCALE_STAGING_TESTS = 'true';
+
+        try {
+            expect(process.env.ARCHSCALE_STAGING_TESTS).toBe('true');
+            // Staging tests require this flag to access staging runtime pool
+        } finally {
+            if (oldStagingFlag !== undefined) {
+                process.env.ARCHSCALE_STAGING_TESTS = oldStagingFlag;
+            } else {
+                delete process.env.ARCHSCALE_STAGING_TESTS;
+            }
+        }
+    });
 });

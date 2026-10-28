@@ -30,6 +30,18 @@ export function assertLocalTestDatabaseGuard(url: string | undefined): URL {
 }
 
 function createRuntimePool(): pg.Pool {
+    if (process.env.ARCHSCALE_STAGING_TESTS === 'true') {
+        // Explicit staging test mode for tests/staging/ only:
+        // Connects to staging database using staging runtime role
+        return new Pool({
+            connectionString: config.archscaleRuntimeDbUrl,
+            ssl: { rejectUnauthorized: false },
+            max: 20,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000
+        });
+    }
+
     if (process.env.NODE_ENV === 'test') {
         // Local test mode: strictly must NOT read ARCHSCALE_RUNTIME_DB_URL
         const testDbUrl = process.env.ARCHSCALE_TEST_DB_URL;
@@ -38,7 +50,7 @@ function createRuntimePool(): pg.Pool {
             host: parsed.hostname,
             port: parseInt(parsed.port || '5432', 10),
             user: 'archscale_app_runtime',
-            password: 'archscale_runtime_local_pass',
+            password: process.env.ARCHSCALE_LOCAL_RUNTIME_PASSWORD || 'local_test_pass',
             database: parsed.pathname.replace('/', '') || 'postgres',
             max: 10,
             idleTimeoutMillis: 30000,

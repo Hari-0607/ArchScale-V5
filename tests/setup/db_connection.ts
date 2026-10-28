@@ -36,11 +36,16 @@ export const DB_CONFIG: pg.PoolConfig = {
     database: parsedUrl.pathname.replace('/', '') || 'postgres'
 };
 
+import * as crypto from 'crypto';
+
+const localRuntimePassword = process.env.ARCHSCALE_LOCAL_RUNTIME_PASSWORD || crypto.randomBytes(16).toString('hex');
+process.env.ARCHSCALE_LOCAL_RUNTIME_PASSWORD = localRuntimePassword;
+
 export const RUNTIME_CONFIG: pg.PoolConfig = {
     host: parsedUrl.hostname,
     port: parseInt(parsedUrl.port || '5432', 10),
     user: 'archscale_app_runtime',
-    password: 'archscale_runtime_local_pass',
+    password: localRuntimePassword,
     database: parsedUrl.pathname.replace('/', '') || 'postgres'
 };
 
