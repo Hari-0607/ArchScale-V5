@@ -29,6 +29,16 @@ interface JwtPayload {
     user_metadata?: Record<string, any>;
 }
 
+let timingFloorBreachCount = 0;
+
+export function getTimingFloorBreachCount(): number {
+    return timingFloorBreachCount;
+}
+
+export function resetTimingFloorBreachCount(): void {
+    timingFloorBreachCount = 0;
+}
+
 export class SupabaseProvider implements IdentityProvider {
     private client: SupabaseClient;
     private adminClient: SupabaseClient;
@@ -257,9 +267,12 @@ export class SupabaseProvider implements IdentityProvider {
         }
     }
 
-    private async equalizeTiming(startTime: number, minMs = 700): Promise<void> {
+    private async equalizeTiming(startTime: number, minMs = 1000): Promise<void> {
         const elapsed = Date.now() - startTime;
-        if (elapsed < minMs) {
+        if (elapsed > minMs) {
+            timingFloorBreachCount++;
+            console.log(`[TIMING_FLOOR_EXCEEDED] Path duration ${elapsed}ms naturally exceeded floor ${minMs}ms (total breaches: ${timingFloorBreachCount})`);
+        } else {
             await new Promise(resolve => setTimeout(resolve, minMs - elapsed));
         }
     }
