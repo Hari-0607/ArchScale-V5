@@ -324,11 +324,17 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
             const client = await dbPool.connect();
             try {
                 await client.query('BEGIN;');
-                await client.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [
-                    contextId,
-                    principal.id,
-                    principal.sessionId
-                ]);
+                try {
+                    await client.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [
+                        contextId,
+                        principal.id,
+                        principal.sessionId
+                    ]);
+                } catch (ctxErr: any) {
+                    console.error('fn_set_app_context failed:', ctxErr.message);
+                    await client.query('ROLLBACK;').catch(() => {});
+                    return sendJson(res, 403, { error: 'AUTH_CONTEXT_INVALID' });
+                }
 
                 // GET /api/me
                 if (pathname === '/api/me' && method === 'GET') {

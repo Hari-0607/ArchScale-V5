@@ -437,8 +437,11 @@ describe('HTTP Server Integration Tests (LocalProvider)', () => {
                 'X-ArchScale-Context': ctxAal1Id
             }
         });
-        expect(platDenyRes.status).toBe(403);
         const platDenyBody = await platDenyRes.json();
+        if (platDenyRes.status !== 403) {
+            console.error('platDenyRes status:', platDenyRes.status, platDenyBody);
+        }
+        expect(platDenyRes.status).toBe(403);
         expect(platDenyBody.error).toBe('AUTH_AAL');
 
         // MFA verify with wrong code: 401
