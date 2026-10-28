@@ -276,7 +276,7 @@ export class LocalProvider implements IdentityProvider {
         };
     }
 
-    async verifyMfa(factorId: string, challengeId: string, code: string): Promise<MfaVerificationResult> {
+    async verifyMfa(factorId: string, challengeId: string, code: string, currentSessionId?: string, currentUserId?: string, currentEmail?: string): Promise<MfaVerificationResult> {
         const ch = this.challenges.get(challengeId);
         if (!ch || ch.factorId !== factorId || Date.now() / 1000 > ch.expiresAt) {
             throw new AuthenticationError('Invalid or expired MFA challenge', 'MFA_CHALLENGE_INVALID');
@@ -288,18 +288,27 @@ export class LocalProvider implements IdentityProvider {
 
         this.challenges.delete(challengeId);
 
-        // Elevate session to aal2
-        const dummyPrincipal: VerifiedPrincipal = {
-            id: `usr_elevated_${factorId}`,
-            email: 'elevated@archscale.local',
-            sessionId: `sess_elevated_${challengeId}`,
+        // Keep the same session ID (sid claim) as verified on staging
+        const sid = currentSessionId || `sess_elevated_${challengeId}`;
+        const uid = currentUserId || `usr_elevated_${factorId}`;
+        const email = currentEmail || 'elevated@archscale.local';
+
+        const elevatedPrincipal: VerifiedPrincipal = {
+            id: uid,
+            email: email,
+            sessionId: sid,
             aal: 'aal2',
             issuer: 'http://localhost:54321/auth/v1',
             audience: 'authenticated',
             expiresAt: Math.floor(Date.now() / 1000) + 3600
         };
 
-        const accessToken = this.signToken(dummyPrincipal);
+        const session = this.sessions.get(sid);
+        if (session) {
+            session.aal = 'aal2';
+        }
+
+        const accessToken = this.signToken(elevatedPrincipal);
         const refreshToken = `ref_${crypto.randomBytes(24).toString('hex')}`;
 
         return {

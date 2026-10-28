@@ -28,6 +28,11 @@ export const SERVER_ROUTES: Record<string, ServerRouteDef> = {
     },
 
     // 2. Pre-context session endpoints (require verified identity token)
+    'session.mfa.verify': {
+        path: '/api/session/mfa/verify',
+        method: 'POST',
+        kind: 'session'
+    },
     'session.memberships': {
         path: '/api/session/memberships',
         method: 'GET',

@@ -398,7 +398,25 @@ describe('Migration 013: Context RLS and Authz Functions [Local]', () => {
         `, [USER_B_ID, orgId, wsId]);
         const ctx1Id = ctx1Res.rows[0].fn_create_access_context;
 
-        // Now suspend organisation
+        // Context 2: will test membership suspension (create both before modifying status)
+        const ctx2Res = await adminPool.query<{ fn_create_access_context: string }>(`
+            SELECT fn_create_access_context($1::uuid, 'sess_susp_2', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_B_ID, orgId, wsId]);
+        const ctx2Id = ctx2Res.rows[0].fn_create_access_context;
+
+        // Part A: Suspend membership on ctx2
+        await adminPool.query(`UPDATE public.memberships SET status = 'SUSPENDED' WHERE id = $1;`, [memId]);
+
+        await runtimeClient.query('BEGIN;');
+        await expect(
+            runtimeClient.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [ctx2Id, USER_B_ID, 'sess_susp_2'])
+        ).rejects.toThrow(/ARCHSCALE_INVALID_CONTEXT/);
+        await runtimeClient.query('ROLLBACK;');
+
+        // Reactivate membership
+        await adminPool.query(`UPDATE public.memberships SET status = 'ACTIVE' WHERE id = $1;`, [memId]);
+
+        // Part B: Suspend organisation on ctx1
         await adminPool.query(`UPDATE public.organisations SET status = 'SUSPENDED' WHERE id = $1;`, [orgId]);
 
         // Attempting to fn_set_app_context on ctx1 must fail
@@ -410,34 +428,16 @@ describe('Migration 013: Context RLS and Authz Functions [Local]', () => {
 
         // Reactivate organisation
         await adminPool.query(`UPDATE public.organisations SET status = 'ACTIVE' WHERE id = $1;`, [orgId]);
-
-        // Context 2: will test membership suspension
-        const ctx2Res = await adminPool.query<{ fn_create_access_context: string }>(`
-            SELECT fn_create_access_context($1::uuid, 'sess_susp_2', $2::uuid, $3::uuid, 'aal1');
-        `, [USER_B_ID, orgId, wsId]);
-        const ctx2Id = ctx2Res.rows[0].fn_create_access_context;
-
-        // Suspend membership
-        await adminPool.query(`UPDATE public.memberships SET status = 'SUSPENDED' WHERE id = $1;`, [memId]);
-
-        // Attempting to fn_set_app_context on ctx2 must fail
-        await runtimeClient.query('BEGIN;');
-        await expect(
-            runtimeClient.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [ctx2Id, USER_B_ID, 'sess_susp_2'])
-        ).rejects.toThrow(/ARCHSCALE_INVALID_CONTEXT/);
-        await runtimeClient.query('ROLLBACK;');
-
-        // Reactivate membership
         await adminPool.query(`UPDATE public.memberships SET status = 'ACTIVE' WHERE id = $1;`, [memId]);
 
         // Context 3: Support grant revoked
         const grantRes = await adminPool.query(`
             INSERT INTO public.support_access_grants (
-                grantor_user_id, grantee_user_id, organisation_id, reason, expires_at
+                staff_membership_id, target_organisation_id, reason, started_at, expires_at
             ) VALUES (
-                $1, $2, $3, 'Test support grant for revocation check', now() + INTERVAL '2 hours'
+                $1, $2, 'Test support grant for revocation check', now(), now() + INTERVAL '2 hours'
             ) RETURNING id;
-        `, [USER_A_ID, STAFF_USER_ID, SUBSCRIBER_ORG_ID]);
+        `, [staffMembershipId, SUBSCRIBER_ORG_ID]);
         const grantId = grantRes.rows[0].id;
 
         const staffCtxRes = await adminPool.query<{ fn_create_access_context: string }>(`
@@ -448,9 +448,9 @@ describe('Migration 013: Context RLS and Authz Functions [Local]', () => {
         // Revoke support grant
         await adminPool.query(`
             UPDATE public.support_access_grants
-            SET revoked_at = now(), revoked_by_user_id = $1, revoke_reason = 'Grant revoked in test'
-            WHERE id = $2;
-        `, [USER_A_ID, grantId]);
+            SET revoked_at = now()
+            WHERE id = $1;
+        `, [grantId]);
 
         // Attempting to fn_set_app_context on staffCtxId must fail
         await runtimeClient.query('BEGIN;');

@@ -135,30 +135,56 @@ afterAll(async () => {
 });
 
 describe('02_allowed: Verification of Allowed Authorization Paths and Scopes', () => {
-    it('1. business_owner on org.members.invite: ALLOWED', async () => {
+    it('1. business_owner on org.members.invite: DENIED at aal1, ALLOWED at aal2', async () => {
         const client = await adminPool.connect();
         try {
-            const ctxRes = await client.query<{ fn_create_access_context: string }>(
-                `SELECT fn_create_access_context($1::uuid, 'sess_owner', $2::uuid, $3::uuid, 'aal1');`,
+            // Case A: Context created with aal1
+            const ctxAal1Res = await client.query<{ fn_create_access_context: string }>(
+                `SELECT fn_create_access_context($1::uuid, 'sess_owner_1', $2::uuid, $3::uuid, 'aal1');`,
                 [USER_OWNER_ID, SUBSCRIBER_ORG_A_ID, wsAId]
             );
-            const contextId = ctxRes.rows[0].fn_create_access_context;
+            const ctxAal1Id = ctxAal1Res.rows[0].fn_create_access_context;
 
-            const principal: VerifiedPrincipal = {
+            const principalAal1: VerifiedPrincipal = {
                 id: USER_OWNER_ID,
                 email: 'owner@test.local',
-                sessionId: 'sess_owner',
+                sessionId: 'sess_owner_1',
                 aal: 'aal1',
                 issuer: 'test',
                 audience: 'test',
                 expiresAt: Math.floor(Date.now() / 1000) + 3600
             };
 
-            const decision = await decide(client, principal, contextId, 'org.members.invite');
-            expect(decision.allow).toBe(true);
-            if (decision.allow) {
-                expect(decision.roleKey).toBe('business_owner');
-                expect(decision.organisationId).toBe(SUBSCRIBER_ORG_A_ID);
+            const decisionAal1 = await decide(client, principalAal1, ctxAal1Id, 'org.members.invite');
+            expect(decisionAal1.allow).toBe(false);
+            if (!decisionAal1.allow) {
+                expect(decisionAal1.gateFailed).toBe(8);
+                expect(decisionAal1.reasonCode).toBe('AUTH_AAL');
+            }
+
+            // Case B: Context created with aal2 (after MFA verify)
+            const ctxAal2Res = await client.query<{ fn_create_access_context: string }>(
+                `SELECT fn_create_access_context($1::uuid, 'sess_owner_2', $2::uuid, $3::uuid, 'aal2');`,
+                [USER_OWNER_ID, SUBSCRIBER_ORG_A_ID, wsAId]
+            );
+            const ctxAal2Id = ctxAal2Res.rows[0].fn_create_access_context;
+
+            const principalAal2: VerifiedPrincipal = {
+                id: USER_OWNER_ID,
+                email: 'owner@test.local',
+                sessionId: 'sess_owner_2',
+                aal: 'aal2',
+                issuer: 'test',
+                audience: 'test',
+                expiresAt: Math.floor(Date.now() / 1000) + 3600
+            };
+
+            const decisionAal2 = await decide(client, principalAal2, ctxAal2Id, 'org.members.invite');
+            expect(decisionAal2.allow).toBe(true);
+            if (decisionAal2.allow) {
+                expect(decisionAal2.roleKey).toBe('business_owner');
+                expect(decisionAal2.organisationId).toBe(SUBSCRIBER_ORG_A_ID);
+                expect(decisionAal2.aal).toBe('aal2');
             }
         } finally {
             client.release();
@@ -320,16 +346,16 @@ describe('02_allowed: Verification of Allowed Authorization Paths and Scopes', (
     it('7. two-membership user: owner rights in Org A, never leaks to Org B', async () => {
         const client = await adminPool.connect();
         try {
-            // Context in Org A (as business_owner)
+            // Context in Org A (as business_owner at aal2)
             const ctxARes = await client.query<{ fn_create_access_context: string }>(
-                `SELECT fn_create_access_context($1::uuid, 'sess_multi', $2::uuid, $3::uuid, 'aal1');`,
+                `SELECT fn_create_access_context($1::uuid, 'sess_multi', $2::uuid, $3::uuid, 'aal2');`,
                 [USER_MULTI_ID, SUBSCRIBER_ORG_A_ID, wsAId]
             );
             const contextAId = ctxARes.rows[0].fn_create_access_context;
 
-            // Context in Org B (as intern)
+            // Context in Org B (as intern at aal2)
             const ctxBRes = await client.query<{ fn_create_access_context: string }>(
-                `SELECT fn_create_access_context($1::uuid, 'sess_multi', $2::uuid, $3::uuid, 'aal1');`,
+                `SELECT fn_create_access_context($1::uuid, 'sess_multi', $2::uuid, $3::uuid, 'aal2');`,
                 [USER_MULTI_ID, SUBSCRIBER_ORG_B_ID, wsBId]
             );
             const contextBId = ctxBRes.rows[0].fn_create_access_context;
@@ -338,7 +364,7 @@ describe('02_allowed: Verification of Allowed Authorization Paths and Scopes', (
                 id: USER_MULTI_ID,
                 email: 'multi@test.local',
                 sessionId: 'sess_multi',
-                aal: 'aal1',
+                aal: 'aal2',
                 issuer: 'test',
                 audience: 'test',
                 expiresAt: Math.floor(Date.now() / 1000) + 3600
