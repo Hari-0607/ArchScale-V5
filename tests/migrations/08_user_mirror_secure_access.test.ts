@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { createIsolatedTestDatabase } from '../setup/db_connection.js';
+import { createIsolatedTestDatabase, RUNTIME_CONFIG } from '../setup/db_connection.js';
 import pg from 'pg';
 
 let adminPool: pg.Pool;
@@ -31,6 +31,12 @@ let validContextId: string;
 
 beforeAll(async () => {
     adminPool = await createIsolatedTestDatabase('archscale_test_012');
+
+    // Stand-in auth.users seed (required by fn_upsert_user_mirror)
+    await adminPool.query(
+        `INSERT INTO auth.users (id, email) VALUES ($1, $2), ($3, $4) ON CONFLICT (id) DO NOTHING;`,
+        [TEST_USER_ID_A, TEST_EMAIL_A, TEST_USER_ID_B, TEST_EMAIL_B]
+    );
 
     // Seed two users via admin connection (bypasses RLS)
     await adminPool.query(
