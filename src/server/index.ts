@@ -380,7 +380,7 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
                 if (pathname === '/api/platform/organisations' && method === 'GET') {
                     const decision = await decide(client, principal, contextId, 'platform.organisations.read');
                     if (!decision.allow) {
-                        return sendJson(res, 403, { decision });
+                        return sendJson(res, 403, { error: decision.reasonCode, decision });
                     }
                     // RLS active for platform organisation reads
                     const orgs = await client.query(`SELECT id, name, portal, status FROM public.organisations ORDER BY name;`);
@@ -391,7 +391,7 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
                 if (pathname === '/api/org/members' && method === 'GET') {
                     const decision = await decide(client, principal, contextId, 'org.members.read');
                     if (!decision.allow) {
-                        return sendJson(res, 403, { decision });
+                        return sendJson(res, 403, { error: decision.reasonCode, decision });
                     }
                     // Read members of current context organisation
                     const members = await client.query(
@@ -411,7 +411,7 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
                     } catch {}
                     const decision = await decide(client, principal, contextId, 'org.members.invite', { isMutation: true });
                     if (!decision.allow) {
-                        return sendJson(res, 403, { decision });
+                        return sendJson(res, 403, { error: decision.reasonCode, decision });
                     }
                     return sendJson(res, 200, {
                         decision,
