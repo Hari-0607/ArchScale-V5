@@ -105,9 +105,12 @@ Grant `EXECUTE` on both functions to `archscale_app_runtime`. Direct `SELECT` on
 
 ## 2. Context create: one SECURITY DEFINER function
 
-`fn_create_access_context(p_user_id uuid, p_session_id text, p_organisation_id uuid, p_workspace_id uuid, p_aal aal_level)`
+`fn_create_access_context(p_user_id uuid, p_session_id text, p_organisation_id uuid, p_workspace_id uuid, p_aal aal_level, p_support_grant_id uuid DEFAULT NULL)`
 
 Single transaction. Validates **user + session + membership + organisation + workspace** (and entitlements / support grant) before insert. Returns the new context id or raises with a stable error code the app maps to a client reason code.
+
+`access_contexts` table receives a new column:
+- `support_grant_id uuid REFERENCES support_access_grants(id) ON DELETE RESTRICT` (nullable).
 
 | Check | Fail closed when |
 | :--- | :--- |
@@ -115,18 +118,25 @@ Single transaction. Validates **user + session + membership + organisation + wor
 | Session | `p_session_id` is null/blank (provider session already verified in app; DB stores the id, it does not call Supabase) |
 | Organisation | missing, or `status <> 'ACTIVE'` |
 | Workspace | missing, `is_active = false`, or `organisation_id` ≠ `p_organisation_id` |
-| Membership | no row for `(p_user_id, p_organisation_id)`, or `status <> 'ACTIVE'`, or `expires_at` in the past |
-| Role vs portal | `roles.portal` must match `organisations.portal` for this membership |
+| Membership | no row for `(p_user_id, p_organisation_id)` (or staff membership in platform org when entering via support grant), or `status <> 'ACTIVE'`, or `expires_at` in the past |
+| Role vs portal | standard subscriber: `roles.portal` must match `organisations.portal` for this membership |
 | Role vs tenant type | subscriber: `(role_key, tenant_type_key)` exists in `role_tenant_types` |
 | Entitlements | subscriber: at least one `organisation_entitlements` row with `is_enabled = true` (platform org is exempt) |
-| Platform into tenant | if actor role `portal = 'platform'` **and** target org `portal = 'subscriber'`: require an ACTIVE support grant (see below). Creating a context **in** the platform org does not need a grant |
-| Lifetime | `expires_at = least(now() + interval '24 hours', membership.expires_at)` (if membership expiry is null, `now() + 24 hours`) |
+| Platform into tenant (Support Context) | if actor role `portal = 'platform'` **and** target org `portal = 'subscriber'`: requires `p_support_grant_id` is provided, pointing to an **ACTIVE**, unexpired, unrevoked `support_access_grants` row where `staff_membership_id` is the caller's platform membership and `target_organisation_id = p_organisation_id`. Context is created with `organisation_id = p_organisation_id`, `membership_id = staff_membership_id`, and `support_grant_id = p_support_grant_id`. |
+| Lifetime | `expires_at = least(now() + interval '24 hours', membership.expires_at[, grant.expires_at])` (if expiry is null, capped by 24h) |
 | AAL stored | `aal_level` column = `p_aal` from the **verified principal**, not from the client |
+
+### Support Context Read-Only Invariant
+A support context represents platform staff entering a subscriber tenant for servicing:
+1. **SELECT-only**: Tenant-table RLS policies evaluate against the target org and allow SELECT.
+2. **Fail-closed writes**: Every write, mutation, or approval function in the database (e.g. membership approvals, settings updates, user modifications) must check `support_grant_id`. If `support_grant_id IS NOT NULL`, the operation immediately raises an error (`AUTH_SUPPORT_READ_ONLY`) and aborts.
+3. **Continuous grant validation**: `is_context_valid(uuid)` re-verifies the referenced grant on every call (active, not revoked, not expired). Revoking a grant terminates the support context immediately.
+4. **Grant lifetime bound**: Context expiry is bounded by the grant's own expiry timestamp.
 
 Insert into `access_contexts`. Append audit `context.create`. Do not write role or org from caller-supplied JSON.
 
-**Renew:** `fn_renew_access_context(p_context_id uuid, p_user_id uuid, p_session_id uuid-or-text)`  
-Re-run the same membership / org / workspace / entitlement / grant checks against the **existing** context’s bound ids (not new ids from the client). Set `expires_at = least(now() + 24 hours, membership.expires_at)` still constrained by `created_at + 24 hours` — if `created_at + 24 hours` is in the past, refuse and require a new context. Audit `context.renew`.
+**Renew:** `fn_renew_access_context(p_context_id uuid, p_user_id uuid, p_session_id text)`  
+Re-run the same membership / org / workspace / entitlement / grant checks against the **existing** context’s bound ids (not new ids from the client). Set `expires_at = least(now() + 24 hours, membership.expires_at[, grant.expires_at])` still constrained by `created_at + 24 hours` — if `created_at + 24 hours` is in the past, refuse and require a new context. Audit `context.renew`.
 
 **Revoke:** `fn_revoke_access_context(p_context_id uuid, p_user_id uuid, p_session_id text)`  
 Sets `revoked_at = now()` only if `user_id` and `session_id` match. Logout in app: provider `revokeSession` **and** this function. Audit `context.revoke`.
@@ -135,19 +145,32 @@ Direct `INSERT`/`UPDATE` on `access_contexts` by runtime is revoked; only these 
 
 ---
 
-## 3. Audit writes when the context is invalid
+## 3. Audit logging and permission-gated audit reads
 
 `decide()` must log denials for forged, expired, or missing contexts. A policy that requires `is_context_valid()` on `INSERT` would drop those rows.
 
 **Replace** migration 007’s open policies (`WITH CHECK (true)` / `USING (true)`):
 
-- `REVOKE INSERT, SELECT ON audit_logs FROM archscale_app_runtime` then grant only through functions.
-- `fn_audit_append(...)` `SECURITY DEFINER`: inserts one row. Callable **with or without** a valid context. Used for denials, context lifecycle, and later approvals.
-- `fn_audit_read_for_context()` or a SELECT policy: `is_context_valid() AND organisation_id = (organisation of current context)` for subscriber; platform `platform.audit.read` is a later route, not an open SELECT.
+- `REVOKE INSERT, SELECT, UPDATE, DELETE ON audit_logs FROM archscale_app_runtime`; direct access is completely revoked.
+- **Append**: `fn_audit_append(...)` `SECURITY DEFINER`:
+  - When a validated context exists (`is_context_valid()` = true):
+    - Derives `actor_user_id`, `actor_membership_id`, and `organisation_id` directly from the validated context row in `access_contexts`, completely ignoring caller-supplied values.
+  - With **no** context (pre-auth / denial paths):
+    - Accepts only a fixed allowlist of action names:
+      - `AUTH_SIGNIN_FAILED`
+      - `AUTH_CONTEXT_DENIED`
+      - `AUTH_TOKEN_TAMPERED`
+      - `AUTH_SESSION_REVOKED`
+    - Any unlisted action name without a valid context is rejected.
+    - Sets `organisation_id = NULL`.
+    - Writes `actor_user_id` only if provided (e.g. from a resolved principal).
+- **Read**: `fn_read_audit_logs(p_limit int, p_offset int)` `SECURITY DEFINER`:
+  - Requires a valid context (`is_context_valid()` = true).
+  - Enforces permission check: caller must have `org.audit.read` (or `platform.audit.read` if in platform context).
+  - Scopes rows strictly to `audit_logs.organisation_id = context.organisation_id`.
+  - Direct SELECT on `audit_logs` remains completely revoked for `archscale_app_runtime`.
 
 Immutability triggers stay. Runtime never gets `UPDATE`/`DELETE`/`TRUNCATE`.
-
-**Rule a policy cannot express:** “INSERT allowed with no context for denials; SELECT allowed only with a valid context in-scope.” That split is function-based, not a single RLS policy.
 
 ---
 
@@ -208,7 +231,9 @@ Legend: **P** = context-bound RLS using `is_context_valid()` / `fn_current_conte
 ### access_contexts
 
 - **Need:** create / renew / revoke / decide.
-- **Access:** **F** only (`fn_create_access_context`, `fn_renew_access_context`, `fn_revoke_access_context`, plus `fn_set_app_context` / `is_context_valid`). **No** SELECT policy that returns other users’ contexts. Optional **P** SELECT of **own** row: `id` = GUC id **and** `is_context_valid()` **and** `user_id = fn_current_context_user_id()`.
+- **Access:** **F** only (`fn_create_access_context`, `fn_renew_access_context`, `fn_revoke_access_context`, plus `fn_set_app_context` / `is_context_valid`).
+- **Schema addition in Migration 013**: `support_grant_id uuid REFERENCES support_access_grants(id) ON DELETE RESTRICT` (nullable).
+- **No** open SELECT policy that returns other users’ contexts. Optional **P** SELECT of **own** row: `id` = GUC id **and** `is_context_valid()` **and** `user_id = fn_current_context_user_id()`.
 - **Cannot express:** create-time validation of session + membership + org + workspace + grant in one atomic insert — that is the definer function.
 
 ### organisations
@@ -250,7 +275,11 @@ Legend: **P** = context-bound RLS using `is_context_valid()` / `fn_current_conte
 ### support_access_grants
 
 - **Need:** Gate 5 and create-context for platform-into-tenant.
-- **Access:** runtime must **not** SELECT all grants. **F** `fn_active_support_grant(p_staff_membership_id, p_target_org_id)` returns grant id or null. Optional **P** SELECT for platform-context users of grants they issued — defer; Step 2 only needs the function.
+- **Access:** runtime must **not** SELECT all grants.
+- **Definer function**: `fn_active_support_grant(p_target_org_id uuid)` `SECURITY DEFINER`:
+  - Derives the platform staff membership directly from the validated active context (`context.membership_id`).
+  - Argument is strictly `p_target_org_id`.
+  - Returns active grant id or NULL.
 - **Cannot express:** “grant is ACTIVE, not expired, not revoked, staff membership is platform, target is this subscriber org, and the current context user owns that staff membership” as a simple org-id equality policy without leaking other tenants’ grants.
 
 ### share_grants
@@ -260,14 +289,18 @@ Legend: **P** = context-bound RLS using `is_context_valid()` / `fn_current_conte
 
 ### audit_logs
 
-- **Need:** append on lifecycle + every DENY; later SELECT in-org.
-- **Access:** **F** `fn_audit_append` (no valid context required). SELECT **P** in-org after valid context, or platform read in a later step. Drop `USING (true)` / `WITH CHECK (true)`.
+- **Need:** append on lifecycle + every DENY; read logs in-org via permission-gated function.
+- **Access:**
+  - **Direct SELECT and writes completely revoked**: `REVOKE SELECT, INSERT, UPDATE, DELETE ON audit_logs FROM archscale_app_runtime`.
+  - **Append**: `fn_audit_append(...)` `SECURITY DEFINER` (derives actor/membership/org from context if valid; allowlist actions only with org=NULL if no context).
+  - **Read**: `fn_read_audit_logs(p_limit int, p_offset int)` `SECURITY DEFINER`: gated by `org.audit.read` (or `platform.audit.read`).
+  - Migration 007's open policies (`WITH CHECK (true)` / `USING (true)`) dropped.
 
 ### approval_policies, access_requests, approval_steps
 
 - **Need:** none in Step 2 routes (no approve endpoints). Existing `fn_approve_organisation` / `fn_approve_membership` stay the only writers.
-- **Access:** Direct INSERT/UPDATE revoked for runtime (already intended; confirm GRANT). **P** SELECT same-org + `is_context_valid()` so we do not leave FORCE RLS with zero policies if something selects. Writes remain **F**.
-- **Cannot express:** separation of duties and level ceiling — already triggers, not RLS.
+- **Access:** Direct INSERT/UPDATE revoked for runtime. **P** SELECT same-org + `is_context_valid()` so we do not leave FORCE RLS with zero policies if something selects. Writes remain **F**.
+- **Support Context Restriction**: Write functions reject support contexts (`support_grant_id IS NOT NULL`) with error `AUTH_SUPPORT_READ_ONLY`.
 
 ### users (already 012)
 
@@ -277,18 +310,24 @@ Legend: **P** = context-bound RLS using `is_context_valid()` / `fn_current_conte
 
 ## 7. File layout (Step 2 implementation, after approval)
 
+All database changes ship as **new migrations** (`migrations/013_...` and later). Applied migrations (`001`–`012`) are never edited.
+
 ```
 migrations/013_context_rls_and_authz_functions.sql
-  is_context_valid(uuid) SECURITY DEFINER
-  fn_list_principal_memberships
-  fn_list_org_workspaces_for_principal
-  fn_create_access_context
-  fn_renew_access_context
-  fn_revoke_access_context
-  fn_active_support_grant
-  fn_audit_append
-  RLS policies per table above
-  REVOKE direct writes on access_contexts, memberships, …
+  access_contexts.support_grant_id column addition
+  fn_set_app_context(context_id, user_id, session_id)
+  is_context_valid(uuid) SECURITY DEFINER (checks support grant if set)
+  fn_list_principal_memberships(user_id)
+  fn_list_org_workspaces_for_principal(user_id, org_id)
+  fn_create_access_context(..., support_grant_id)
+  fn_renew_access_context(context_id, user_id, session_id)
+  fn_revoke_access_context(context_id, user_id, session_id)
+  fn_active_support_grant(target_org_id)
+  fn_audit_append (context-derived actors; allowlist when no context)
+  fn_read_audit_logs (permission-gated by org.audit.read)
+  RLS policies per table above (support context SELECT-only)
+  REVOKE direct writes on access_contexts, memberships, etc.
+  REVOKE direct SELECT on audit_logs
 
 src/authz/reasons.ts          -- client reason codes
 src/authz/route_map.ts        -- ROUTE_PERMISSIONS
@@ -297,6 +336,7 @@ src/authz/decide.ts           -- decide()
 src/context/memberships.ts    -- list memberships / workspaces (principal.id only)
 src/context/access_context.ts -- create / renew / revoke
 src/audit/append.ts           -- wrapper around fn_audit_append
+src/audit/read.ts             -- wrapper around fn_read_audit_logs
 
 tests/authz/01_denials.test.ts
 tests/authz/02_allowed.test.ts
