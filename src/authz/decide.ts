@@ -223,10 +223,7 @@ export async function decide(
     }
 
     // Gate 8: Role has permission & AAL
-    if (routeDef.deniedRoleKeys && routeDef.deniedRoleKeys.includes(row.role_key)) {
-        return deny(8, 'AUTH_PERMISSION', `Role ${row.role_key} is explicitly denied on this route`);
-    }
-
+    // First, check role holds the required permission
     const permCheck = await client.query(
         `SELECT 1 FROM public.role_permissions WHERE role_key = $1 AND permission_key = $2;`,
         [row.role_key, routeDef.permission]
@@ -235,9 +232,26 @@ export async function decide(
         return deny(8, 'AUTH_PERMISSION', `Role ${row.role_key} does not hold permission ${routeDef.permission}`);
     }
 
-    // Platform portal requires AAL2
-    if (row.portal === 'platform' && row.aal !== 'aal2') {
-        return deny(8, 'AUTH_AAL', 'Platform portal operations require AAL2');
+    // Second, verify context AAL meets both role's min_aal and permission's min_aal
+    const aalQuery = `
+        SELECT 
+            r.min_aal AS role_min_aal,
+            p.min_aal AS perm_min_aal
+        FROM public.roles r
+        CROSS JOIN public.permissions p
+        WHERE r.key = $1 AND p.key = $2;
+    `;
+    const aalRes = await client.query<{ role_min_aal: 'aal1' | 'aal2'; perm_min_aal: 'aal1' | 'aal2' }>(
+        aalQuery,
+        [row.role_key, routeDef.permission]
+    );
+
+    if (aalRes.rowCount && aalRes.rowCount > 0) {
+        const { role_min_aal, perm_min_aal } = aalRes.rows[0];
+        const requiredAal = (role_min_aal === 'aal2' || perm_min_aal === 'aal2') ? 'aal2' : 'aal1';
+        if (requiredAal === 'aal2' && row.aal !== 'aal2') {
+            return deny(8, 'AUTH_AAL', `Operation requires AAL2 (role requires ${role_min_aal}, permission requires ${perm_min_aal}, current is ${row.aal})`);
+        }
     }
 
     // Final sanity check: DB is_context_valid must pass
