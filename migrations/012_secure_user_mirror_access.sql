@@ -159,12 +159,48 @@ REVOKE EXECUTE ON FUNCTION is_context_valid() FROM PUBLIC;
 GRANT  EXECUTE ON FUNCTION is_context_valid() TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 6. Context-bound SELECT policy for public.users
+-- 6. Helper: fn_current_context_user_id()
+--    Returns the user_id bound to the current transaction context if and only
+--    if is_context_valid() is true. Returns NULL if context is missing, empty,
+--    or invalid. SECURITY DEFINER ensures access_contexts is read securely.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_current_context_user_id()
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_user_id UUID;
+BEGIN
+    v_ctx_id := NULLIF(current_setting('archscale.current_context_id', true), '')::uuid;
+    IF v_ctx_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    IF NOT is_context_valid(v_ctx_id) THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT user_id INTO v_user_id
+    FROM access_contexts
+    WHERE id = v_ctx_id;
+
+    RETURN v_user_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_current_context_user_id() FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_current_context_user_id() TO archscale_app_runtime;
+
+-- -----------------------------------------------------------------------------
+-- 7. Context-bound SELECT policy for public.users
 --
 --    The runtime role may SELECT only the row whose id is the user_id of
---    the currently validated access_context. is_context_valid() is called
---    every time the policy fires -- no GUC is trusted on its own.
---    Uses NULLIF(current_setting(...), '')::uuid to safely handle empty string GUC.
+--    the currently validated access_context. is_context_valid() is verified
+--    every time the policy fires.
 -- -----------------------------------------------------------------------------
 DO $$
 BEGIN
@@ -178,13 +214,7 @@ BEGIN
             FOR SELECT
             TO archscale_app_runtime
             USING (
-                id = (
-                    SELECT ac.user_id
-                    FROM access_contexts ac
-                    WHERE ac.id = NULLIF(current_setting('archscale.current_context_id', true), '')::uuid
-                      AND is_context_valid(ac.id)
-                    LIMIT 1
-                )
+                id = fn_current_context_user_id()
             );
     END IF;
 END $$;
