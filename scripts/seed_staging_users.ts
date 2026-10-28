@@ -82,6 +82,13 @@ async function main() {
         `, [studioOrgId]);
         const studioWsId = studioWsRes.rows[0].id;
 
+        // Ensure core_billing exists in app_catalogue
+        await pgAdmin.query(`
+            INSERT INTO public.app_catalogue (app_key, name)
+            VALUES ('core_billing', 'Core Billing')
+            ON CONFLICT (app_key) DO NOTHING;
+        `);
+
         await pgAdmin.query(`
             INSERT INTO public.organisation_entitlements (organisation_id, app_key, is_enabled)
             VALUES ($1, 'core_billing', true) ON CONFLICT DO NOTHING;
