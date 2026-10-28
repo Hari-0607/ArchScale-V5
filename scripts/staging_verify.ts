@@ -23,6 +23,15 @@ interface TestGroupResult {
     tests: string[];
 }
 
+export interface VerificationCheckSpec {
+    suite: string;
+    rule: string;
+    statement: string;
+    expectedSqlState: string;
+    expectedConstraintOrTrigger?: string;
+    positiveControl: string;
+}
+
 export async function runStagingVerification(): Promise<boolean> {
     const adminUrl = process.env.SUPABASE_DB_ADMIN_URL;
     const runtimeUrl = process.env.ARCHSCALE_RUNTIME_DB_URL;
@@ -39,7 +48,7 @@ export async function runStagingVerification(): Promise<boolean> {
 
     console.log('================================================================');
     console.log('ArchScale V05: Staging Invariant & Security Verification Suite');
-    console.log('Target: Supabase Staging (All writes isolated with ROLLBACK)');
+    console.log('Isolation: Transaction-level with SAVEPOINT isolation per check');
     console.log('================================================================\n');
 
     const results: Record<string, TestGroupResult> = {
@@ -52,62 +61,143 @@ export async function runStagingVerification(): Promise<boolean> {
         '07_runtime_privilege_proof': { passed: 0, failed: 0, tests: [] }
     };
 
-    function record(file: string, testName: string, ok: boolean, errMsg?: string) {
+    function record(file: string, testName: string, ok: boolean, detail?: string) {
         if (ok) {
             results[file].passed++;
             results[file].tests.push(`  [PASS] ${testName}`);
         } else {
             results[file].failed++;
-            results[file].tests.push(`  [FAIL] ${testName}: ${errMsg || 'Assertion failed'}`);
+            results[file].tests.push(`  [FAIL] ${testName}: ${detail || 'Assertion failed'}`);
         }
     }
 
-    // =========================================================================
-    // Suite 01: Schema and Types
-    // =========================================================================
-    const file1 = '01_schema_and_types';
+    /**
+     * Executes a failure assertion inside an isolated SAVEPOINT so 25P02 cannot poison the outer transaction.
+     * Asserts exact SQLSTATE and constraint/trigger name.
+     */
+    async function assertSavepointFailure(
+        client: pg.Client,
+        file: string,
+        ruleName: string,
+        action: () => Promise<any>,
+        expectedCode: string,
+        expectedConstraint?: string
+    ): Promise<boolean> {
+        await client.query('SAVEPOINT sp_fail_check;');
+        let thrown: any = null;
+        try {
+            await action();
+        } catch (err: any) {
+            thrown = err;
+        } finally {
+            await client.query('ROLLBACK TO SAVEPOINT sp_fail_check;');
+            await client.query('RELEASE SAVEPOINT sp_fail_check;').catch(() => {});
+        }
+
+        if (!thrown) {
+            record(file, ruleName, false, `Expected error ${expectedCode} but statement succeeded`);
+            return false;
+        }
+
+        const codeMatches = thrown.code === expectedCode;
+        let constraintMatches = true;
+        if (expectedConstraint) {
+            const msg = (thrown.message || '').toLowerCase();
+            const constraint = (thrown.constraint || '').toLowerCase();
+            const target = expectedConstraint.toLowerCase();
+            constraintMatches = constraint.includes(target) || msg.includes(target);
+        }
+
+        const ok = codeMatches && constraintMatches;
+        const detail = ok
+            ? undefined
+            : `Got code=${thrown.code} (expected ${expectedCode}), constraint=${thrown.constraint || 'none'} (expected ${expectedConstraint || 'any'}), msg="${thrown.message}"`;
+        record(file, ruleName, ok, detail);
+        return ok;
+    }
+
+    /**
+     * Executes a positive control inside an isolated SAVEPOINT.
+     * Statement must succeed, then rolls back.
+     */
+    async function assertSavepointControl(
+        client: pg.Client,
+        file: string,
+        ruleName: string,
+        action: () => Promise<any>
+    ): Promise<boolean> {
+        await client.query('SAVEPOINT sp_ctrl_check;');
+        let thrown: any = null;
+        try {
+            await action();
+        } catch (err: any) {
+            thrown = err;
+        } finally {
+            await client.query('ROLLBACK TO SAVEPOINT sp_ctrl_check;');
+            await client.query('RELEASE SAVEPOINT sp_ctrl_check;').catch(() => {});
+        }
+
+        const ok = !thrown;
+        record(file, `[control] ${ruleName}`, ok, thrown ? `Control statement failed: ${thrown.message}` : undefined);
+        return ok;
+    }
+
+    // Outer transaction: guarantees zero changes persist to staging
+    await adminClient.query('BEGIN;');
+
     try {
+        // =========================================================================
+        // Suite 01: Schema and Types
+        // =========================================================================
+        const file1 = '01_schema_and_types';
+
         // 1.1 Tenant types exist
-        const tt = await adminClient.query("SELECT count(*) FROM tenant_types;");
-        record(file1, 'tenant_types table exists and readable', parseInt(tt.rows[0].count, 10) >= 3);
+        const tt = await adminClient.query("SELECT count(*) FROM tenant_types WHERE is_active = true;");
+        record(file1, 'tenant_types catalogue populated with >= 3 active rows', parseInt(tt.rows[0].count, 10) >= 3);
 
-        // 1.2 Portal constraint (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key) VALUES ('Illegal Platform Org', 'platform', 'studio_owner');");
-            record(file1, 'enforces organisations.tenant_type_key is NULL iff portal = platform', false);
-        } catch (e: any) {
-            record(file1, 'enforces organisations.tenant_type_key is NULL iff portal = platform', e.code === '23514');
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
+        // 1.2 Portal constraint: tenant_type_key IS NULL iff portal = 'platform'
+        await assertSavepointFailure(
+            adminClient, file1,
+            'enforces chk_org_portal_tenant_type on invalid platform org',
+            () => adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key) VALUES ('Illegal Platform Org', 'platform', 'studio_owner');"),
+            '23514', 'chk_org_portal_tenant_type'
+        );
+        await assertSavepointControl(
+            adminClient, file1,
+            'chk_org_portal_tenant_type allows valid subscriber org',
+            () => adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key) VALUES ('Valid Sub Org', 'subscriber', 'studio_owner');")
+        );
 
-        // 1.3 Single platform org (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key) VALUES ('Rogue Platform Org 2', 'platform', NULL);");
-            record(file1, 'enforces single platform organisation unique index', false);
-        } catch (e: any) {
-            record(file1, 'enforces single platform organisation unique index', e.code === '23505');
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
+        // 1.3 Single platform org
+        await assertSavepointFailure(
+            adminClient, file1,
+            'enforces idx_single_platform_org unique index against duplicate platform org',
+            () => adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key) VALUES ('Rogue Platform Org 2', 'platform', NULL);"),
+            '23505', 'idx_single_platform_org'
+        );
+        await assertSavepointControl(
+            adminClient, file1,
+            'idx_single_platform_org allows multiple distinct subscriber orgs',
+            () => adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key) VALUES ('Distinct Sub Org 2', 'subscriber', 'project_owner');")
+        );
 
-        // 1.4 Users table identity mirror (in public schema)
+        // 1.4 Users table pure identity mirror
         const uCols = (await adminClient.query("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users';")).rows.map(r => r.column_name);
         const hasNoRole = !uCols.includes('role') && !uCols.includes('role_key') && !uCols.includes('organisation_id');
         record(file1, 'users table has no tenant or role columns (pure identity mirror)', hasNoRole);
 
-        // 1.5 Roles level check (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            await adminClient.query("INSERT INTO roles (key, name, description, portal, level) VALUES ('bad_level', 'Bad', 'Desc', 'subscriber', 101);");
-            record(file1, 'roles level check constraint enforces 0-100', false);
-        } catch (e: any) {
-            record(file1, 'roles level check constraint enforces 0-100', e.code === '23514');
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
+        // 1.5 Roles level check (0-100)
+        await assertSavepointFailure(
+            adminClient, file1,
+            'enforces chk_roles_level_range on level > 100',
+            () => adminClient.query("INSERT INTO roles (key, name, description, portal, level) VALUES ('bad_level_role', 'Bad', 'Desc', 'subscriber', 101);"),
+            '23514', 'chk_roles_level_range'
+        );
+        await assertSavepointControl(
+            adminClient, file1,
+            'chk_roles_level_range allows level within 0-100',
+            () => adminClient.query("INSERT INTO roles (key, name, description, portal, level) VALUES ('valid_level_role', 'Valid', 'Desc', 'subscriber', 50);")
+        );
 
         // 1.6 Custom enum
         const aalEnums = (await adminClient.query("SELECT enumlabel FROM pg_enum WHERE enumtypid = 'public.aal_level'::regtype;")).rows.map(r => r.enumlabel);
@@ -116,267 +206,255 @@ export async function runStagingVerification(): Promise<boolean> {
         // 1.7 Table RLS enabled
         const rlsTables = (await adminClient.query("SELECT rowsecurity FROM pg_tables WHERE schemaname = 'public' AND tablename = 'organisations';")).rows[0]?.rowsecurity;
         record(file1, 'Row level security is enabled on organisations table', rlsTables === true);
-    } catch (e: any) {
-        record(file1, 'Suite 01 execution', false, e.message);
-    }
 
-    // =========================================================================
-    // Suite 02: Security Invariants Enforcement
-    // =========================================================================
-    const file2 = '02_invariants_enforcement';
-    try {
-        // 2.1 Max 24h cap on access_contexts (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            const uId = (await adminClient.query("INSERT INTO users (user_code, email) VALUES ('TC-CTX1', 'tc_ctx1@test.com') RETURNING id;")).rows[0].id;
-            const oId = (await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('Test Org Invariant', 'subscriber', 'studio_owner', 'ACTIVE') RETURNING id;")).rows[0].id;
-            const wId = (await adminClient.query("INSERT INTO workspaces (organisation_id, name) VALUES ($1, 'Main') RETURNING id;", [oId])).rows[0].id;
-            const mId = (await adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $2, 'business_owner', 'ACTIVE') RETURNING id;", [uId, oId])).rows[0].id;
+        // =========================================================================
+        // Suite 02: Invariants Enforcement
+        // =========================================================================
+        const file2 = '02_invariants_enforcement';
 
-            try {
-                await adminClient.query("INSERT INTO access_contexts (user_id, session_id, organisation_id, workspace_id, membership_id, expires_at) VALUES ($1, 'sess_1', $2, $3, $4, now() + interval '48 hours');", [uId, oId, wId, mId]);
-                record(file2, 'enforces chk_context_max_24h cap on access_contexts', false);
-            } catch (chkErr: any) {
-                record(file2, 'enforces chk_context_max_24h cap on access_contexts', chkErr.code === '23514');
-            }
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
+        // Setup test fixtures inside a savepoint so clean entities exist for Suite 02
+        await adminClient.query('SAVEPOINT sp_suite2_setup;');
+        const testU1 = (await adminClient.query("INSERT INTO users (user_code, email) VALUES ('TC-VFY-U1', 'tc_vfy_u1@archscale.test') RETURNING id;")).rows[0].id;
+        const testU2 = (await adminClient.query("INSERT INTO users (user_code, email) VALUES ('TC-VFY-U2', 'tc_vfy_u2@archscale.test') RETURNING id;")).rows[0].id;
+        const testOrgActive = (await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('TC Active Org', 'subscriber', 'studio_owner', 'ACTIVE') RETURNING id;")).rows[0].id;
+        const testOrgSuspended = (await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('TC Suspended Org', 'subscriber', 'studio_owner', 'SUSPENDED') RETURNING id;")).rows[0].id;
+        const testWs = (await adminClient.query("INSERT INTO workspaces (organisation_id, name) VALUES ($1, 'Main') RETURNING id;", [testOrgActive])).rows[0].id;
+        const testM1 = (await adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $2, 'business_owner', 'ACTIVE') RETURNING id;", [testU1, testOrgActive])).rows[0].id;
+        const platformOrgId = (await adminClient.query("SELECT id FROM organisations WHERE portal = 'platform' LIMIT 1;")).rows[0].id;
+        const staffMemId = (await adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $2, 'founder', 'ACTIVE') RETURNING id;", [testU2, platformOrgId])).rows[0].id;
 
-        // 2.2 Support access grant max 24h (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            const uId = (await adminClient.query("INSERT INTO users (user_code, email) VALUES ('TC-SAG1', 'tc_sag1@test.com') RETURNING id;")).rows[0].id;
-            const pOrg = (await adminClient.query("SELECT id FROM organisations WHERE portal = 'platform' AND status = 'ACTIVE' LIMIT 1;")).rows[0].id;
-            const mId = (await adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $2, 'founder', 'ACTIVE') RETURNING id;", [uId, pOrg])).rows[0].id;
-            const subOrg = (await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('Sub Target Org', 'subscriber', 'studio_owner', 'ACTIVE') RETURNING id;")).rows[0].id;
+        // 2.1 Max 24h cap on access_contexts (chk_context_max_24h)
+        await assertSavepointFailure(
+            adminClient, file2,
+            'enforces chk_context_max_24h on expires_at > 24 hours',
+            () => adminClient.query("INSERT INTO access_contexts (user_id, session_id, organisation_id, workspace_id, membership_id, expires_at) VALUES ($1, 's_bad', $2, $3, $4, now() + interval '48 hours');", [testU1, testOrgActive, testWs, testM1]),
+            '23514', 'chk_context_max_24h'
+        );
+        await assertSavepointControl(
+            adminClient, file2,
+            'chk_context_max_24h allows expires_at within 24 hours',
+            () => adminClient.query("INSERT INTO access_contexts (user_id, session_id, organisation_id, workspace_id, membership_id, expires_at) VALUES ($1, 's_ok', $2, $3, $4, now() + interval '12 hours');", [testU1, testOrgActive, testWs, testM1])
+        );
 
-            try {
-                await adminClient.query("INSERT INTO support_access_grants (staff_membership_id, target_organisation_id, reason, expires_at) VALUES ($1, $2, 'Diagnostic', now() + interval '72 hours');", [mId, subOrg]);
-                record(file2, 'enforces chk_support_grant_max_24h on support_access_grants', false);
-            } catch (chkErr: any) {
-                record(file2, 'enforces chk_support_grant_max_24h on support_access_grants', chkErr.code === '23514');
-            }
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
+        // 2.2 Support access grant max 24h (chk_support_grant_max_24h)
+        await assertSavepointFailure(
+            adminClient, file2,
+            'enforces chk_support_grant_max_24h on expires_at > 24 hours',
+            () => adminClient.query("INSERT INTO support_access_grants (staff_membership_id, target_organisation_id, reason, expires_at) VALUES ($1, $2, 'Diag', now() + interval '72 hours');", [staffMemId, testOrgActive]),
+            '23514', 'chk_support_grant_max_24h'
+        );
+        await assertSavepointControl(
+            adminClient, file2,
+            'chk_support_grant_max_24h allows expires_at within 24 hours',
+            () => adminClient.query("INSERT INTO support_access_grants (staff_membership_id, target_organisation_id, reason, expires_at) VALUES ($1, $2, 'Diag', now() + interval '12 hours');", [staffMemId, testOrgActive])
+        );
 
-        // 2.3 Single share target (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            await adminClient.query("INSERT INTO share_grants (source_organisation_id, target_org_id, target_user_id, resource_type, resource_id, granted_by, expires_at) VALUES ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'project', 'P1', '00000000-0000-0000-0000-000000000001', now() + interval '1 day');");
-            record(file2, 'enforces chk_single_share_target on share_grants', false);
-        } catch (e: any) {
-            record(file2, 'enforces chk_single_share_target on share_grants', e.code === '23514');
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
+        // 2.3 Single share target (chk_single_share_target)
+        await assertSavepointFailure(
+            adminClient, file2,
+            'enforces chk_single_share_target when both target_org_id and target_user_id provided',
+            () => adminClient.query("INSERT INTO share_grants (source_organisation_id, target_org_id, target_user_id, resource_type, resource_id, granted_by, expires_at) VALUES ($1, $1, $2, 'project', 'P1', $2, now() + interval '1 day');", [testOrgActive, testU1]),
+            '23514', 'chk_single_share_target'
+        );
+        await assertSavepointControl(
+            adminClient, file2,
+            'chk_single_share_target allows exactly one target (org-only)',
+            () => adminClient.query("INSERT INTO share_grants (source_organisation_id, target_org_id, target_user_id, resource_type, resource_id, granted_by, expires_at) VALUES ($1, $1, NULL, 'project', 'P1', $2, now() + interval '1 day');", [testOrgActive, testU1])
+        );
 
-        // 2.4 Self-approval blocked (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            await adminClient.query("INSERT INTO approval_steps (request_id, step_number, required_role_key, decided_by, decision, reason) VALUES ('00000000-0000-0000-0000-000000000001', 1, 'business_owner', '00000000-0000-0000-0000-000000000001', 'APPROVED', 'Self');");
-            record(file2, 'blocks self-approval via trg_approval_step_invariants trigger', false);
-        } catch (e: any) {
-            record(file2, 'blocks self-approval via trg_approval_step_invariants trigger', e.code === '23503' || e.code === 'P0001');
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
+        // 2.4 Self-approval blocked (trg_approval_step_invariants)
+        // Setup approval request
+        const reqId = (await adminClient.query(
+            "INSERT INTO approval_requests (organisation_id, requested_by_membership_id, request_type, status, payload) VALUES ($1, $2, 'MEMBERSHIP_ROLE_CHANGE', 'PENDING', '{}') RETURNING id;",
+            [testOrgActive, testM1]
+        )).rows[0].id;
+        await assertSavepointFailure(
+            adminClient, file2,
+            'blocks self-approval via trg_approval_step_invariants',
+            () => adminClient.query("INSERT INTO approval_steps (request_id, step_number, required_role_key, decided_by, decision, reason) VALUES ($1, 1, 'business_owner', $2, 'APPROVED', 'Self');", [reqId, testU1]),
+            'P0001', 'Self-approval is strictly forbidden'
+        );
+        await assertSavepointControl(
+            adminClient, file2,
+            'trg_approval_step_invariants allows distinct decider',
+            () => adminClient.query("INSERT INTO approval_steps (request_id, step_number, required_role_key, decided_by, decision, reason) VALUES ($1, 1, 'business_owner', $2, 'APPROVED', 'Valid');", [reqId, testU2])
+        );
 
-        // 2.5 Intern expiry required (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            const fakeUid = '00000000-0000-0000-0000-000000000001';
-            await adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, expires_at) VALUES ($1, $1, 'intern', NULL);", [fakeUid]);
-            record(file2, 'enforces trg_memberships_expiry_enforcement on intern role', false);
-        } catch (e: any) {
-            record(file2, 'enforces trg_memberships_expiry_enforcement on intern role', e.code === '23503' || e.code === 'P0001');
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
+        // 2.5 Intern expiry required (trg_memberships_expiry_enforcement)
+        // Uses real distinct user and real distinct organisation
+        const internUser = (await adminClient.query("INSERT INTO users (user_code, email) VALUES ('TC-VFY-INT', 'tc_vfy_int@archscale.test') RETURNING id;")).rows[0].id;
+        await assertSavepointFailure(
+            adminClient, file2,
+            'enforces trg_memberships_expiry_enforcement on intern role with NULL expires_at',
+            () => adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, expires_at) VALUES ($1, $2, 'intern', NULL);", [internUser, testOrgActive]),
+            'P0001', 'must have an explicit expires_at'
+        );
+        await assertSavepointControl(
+            adminClient, file2,
+            'trg_memberships_expiry_enforcement allows intern with explicit future expiry',
+            () => adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, expires_at) VALUES ($1, $2, 'intern', now() + interval '30 days');", [internUser, testOrgActive])
+        );
 
-        // 2.6 Active membership requires active org (isolated transaction rollback)
-        try {
-            await adminClient.query('BEGIN;');
-            const fakeUid = '00000000-0000-0000-0000-000000000001';
-            await adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $1, 'business_owner', 'ACTIVE');", [fakeUid]);
-            record(file2, 'blocks active membership under non-active organisation', false);
-        } catch (e: any) {
-            record(file2, 'blocks active membership under non-active organisation', e.code === '23503' || e.code === 'P0001');
-        } finally {
-            await adminClient.query('ROLLBACK;').catch(() => {});
-        }
-    } catch (e: any) {
-        record(file2, 'Suite 02 execution', false, e.message);
-    }
+        // 2.6 Active membership requires active org (trg_membership_active_org_check)
+        // Uses real distinct user and real SUSPENDED organisation
+        const suspendedOrgUser = (await adminClient.query("INSERT INTO users (user_code, email) VALUES ('TC-VFY-SUSP', 'tc_vfy_susp@archscale.test') RETURNING id;")).rows[0].id;
+        await assertSavepointFailure(
+            adminClient, file2,
+            'blocks active membership under non-active organisation via trg_membership_active_org_check',
+            () => adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $2, 'business_owner', 'ACTIVE');", [suspendedOrgUser, testOrgSuspended]),
+            'P0001', 'Cannot assign or activate membership in non-active organisation'
+        );
+        await assertSavepointControl(
+            adminClient, file2,
+            'allows active membership under ACTIVE organisation',
+            () => adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $2, 'business_owner', 'ACTIVE');", [suspendedOrgUser, testOrgActive])
+        );
 
-    // =========================================================================
-    // Suite 03: Org Status Cascade
-    // =========================================================================
-    const file3 = '03_org_status_cascade';
-    try {
-        await adminClient.query('BEGIN;');
-        const oId = (await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('Cascade Test Org', 'subscriber', 'studio_owner', 'ACTIVE') RETURNING id;")).rows[0].id;
-        const uId = (await adminClient.query("INSERT INTO users (user_code, email) VALUES ('TC-CASC1', 'tc_casc1@test.com') RETURNING id;")).rows[0].id;
-        const wId = (await adminClient.query("INSERT INTO workspaces (organisation_id, name) VALUES ($1, 'Main') RETURNING id;", [oId])).rows[0].id;
-        const mId = (await adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $2, 'business_owner', 'ACTIVE') RETURNING id;", [uId, oId])).rows[0].id;
-        const cId = (await adminClient.query("INSERT INTO access_contexts (user_id, session_id, organisation_id, workspace_id, membership_id, expires_at) VALUES ($1, 's1', $2, $3, $4, now() + interval '12 hours') RETURNING id;", [uId, oId, wId, mId])).rows[0].id;
+        // Cleanup Suite 02 fixtures
+        await adminClient.query('ROLLBACK TO SAVEPOINT sp_suite2_setup;');
+
+        // =========================================================================
+        // Suite 03: Org Status Cascade
+        // =========================================================================
+        const file3 = '03_org_status_cascade';
+        await adminClient.query('SAVEPOINT sp_suite3;');
+        const oIdCascade = (await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('Cascade Org', 'subscriber', 'studio_owner', 'ACTIVE') RETURNING id;")).rows[0].id;
+        const uIdCascade = (await adminClient.query("INSERT INTO users (user_code, email) VALUES ('TC-CASC-U', 'tc_casc@archscale.test') RETURNING id;")).rows[0].id;
+        const wIdCascade = (await adminClient.query("INSERT INTO workspaces (organisation_id, name) VALUES ($1, 'Main') RETURNING id;", [oIdCascade])).rows[0].id;
+        const mIdCascade = (await adminClient.query("INSERT INTO memberships (user_id, organisation_id, role_key, status) VALUES ($1, $2, 'business_owner', 'ACTIVE') RETURNING id;", [uIdCascade, oIdCascade])).rows[0].id;
+        const cIdCascade = (await adminClient.query("INSERT INTO access_contexts (user_id, session_id, organisation_id, workspace_id, membership_id, expires_at) VALUES ($1, 's_casc', $2, $3, $4, now() + interval '12 hours') RETURNING id;", [uIdCascade, oIdCascade, wIdCascade, mIdCascade])).rows[0].id;
 
         // Suspend org
-        await adminClient.query("UPDATE organisations SET status = 'SUSPENDED' WHERE id = $1;", [oId]);
+        await adminClient.query("UPDATE organisations SET status = 'SUSPENDED' WHERE id = $1;", [oIdCascade]);
 
-        // Verify context revoked
-        const ctxRevoked = (await adminClient.query("SELECT is_revoked FROM access_contexts WHERE id = $1;", [cId])).rows[0].is_revoked;
+        const ctxRevoked = (await adminClient.query("SELECT is_revoked FROM access_contexts WHERE id = $1;", [cIdCascade])).rows[0].is_revoked;
         record(file3, 'org suspension automatically revokes active access_contexts', ctxRevoked === true);
 
-        // Verify membership suspended
-        const memStatus = (await adminClient.query("SELECT status FROM memberships WHERE id = $1;", [mId])).rows[0].status;
+        const memStatus = (await adminClient.query("SELECT status FROM memberships WHERE id = $1;", [mIdCascade])).rows[0].status;
         record(file3, 'org suspension automatically suspends active memberships', memStatus === 'SUSPENDED');
-    } catch (e: any) {
-        record(file3, 'Suite 03 execution', false, e.message);
-    } finally {
-        await adminClient.query('ROLLBACK;').catch(() => {});
-    }
+        await adminClient.query('ROLLBACK TO SAVEPOINT sp_suite3;');
 
-    // =========================================================================
-    // Suite 04: Atomic Approvals & Invariants
-    // =========================================================================
-    const file4 = '04_atomic_approvals';
-    try {
-        await adminClient.query('BEGIN;');
-        // 4.1 Non-founder cannot approve organisation
-        try {
-            await adminClient.query("SELECT fn_approve_organisation('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', '10.0.0.1'::inet, 'test');");
-            record(file4, 'fn_approve_organisation rejects non-founder caller', false);
-        } catch (e: any) {
-            record(file4, 'fn_approve_organisation rejects non-founder caller', e.code === 'P0001');
-        }
+        // =========================================================================
+        // Suite 04: Atomic Approvals
+        // =========================================================================
+        const file4 = '04_atomic_approvals';
+        await assertSavepointFailure(
+            adminClient, file4,
+            'fn_approve_organisation rejects non-founder caller',
+            () => adminClient.query("SELECT fn_approve_organisation('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', '10.0.0.1'::inet, 'test');"),
+            'P0001', 'Only active founders'
+        );
 
-        // 4.2 Forged actor rejection
-        try {
-            await adminClient.query("SELECT fn_approve_membership('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', '10.0.0.1'::inet, 'test');");
-            record(file4, 'fn_approve_membership rejects forged actor', false);
-        } catch (e: any) {
-            record(file4, 'fn_approve_membership rejects forged actor', e.code === 'P0001');
-        }
+        await assertSavepointFailure(
+            adminClient, file4,
+            'fn_approve_membership rejects forged actor',
+            () => adminClient.query("SELECT fn_approve_membership('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', '10.0.0.1'::inet, 'test');"),
+            'P0001'
+        );
 
-        // 4.3 is_context_valid for non-existent context
-        const isValid = (await adminClient.query("SELECT is_context_valid('00000000-0000-0000-0000-000000000000');")).rows[0].is_context_valid;
-        record(file4, 'is_context_valid returns false for unknown context', isValid === false);
-    } catch (e: any) {
-        record(file4, 'Suite 04 execution', false, e.message);
-    } finally {
-        await adminClient.query('ROLLBACK;').catch(() => {});
-    }
+        const isUnknownValid = (await adminClient.query("SELECT is_context_valid('00000000-0000-0000-0000-000000000000');")).rows[0].is_context_valid;
+        record(file4, 'is_context_valid returns false for unknown context UUID', isUnknownValid === false);
 
-    // =========================================================================
-    // Suite 05: Concurrent Seats Race
-    // =========================================================================
-    const file5 = '05_concurrent_seats_race';
-    try {
-        await adminClient.query('BEGIN;');
-        const oId = (await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('Seat Test Org', 'subscriber', 'studio_owner', 'ACTIVE') RETURNING id;")).rows[0].id;
-        const eId = (await adminClient.query("INSERT INTO entitlements (organisation_id, app_module_key, max_seats, is_enabled) VALUES ($1, 'drawings', 5, true) RETURNING id;", [oId])).rows[0].id;
+        // =========================================================================
+        // Suite 05: Concurrent Seats Race (Uses organisation_seats, NOT non-existent entitlements)
+        // =========================================================================
+        const file5 = '05_concurrent_seats_race';
+        await adminClient.query('SAVEPOINT sp_suite5;');
+        const oIdSeats = (await adminClient.query("INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('Seat Test Org', 'subscriber', 'studio_owner', 'ACTIVE') RETURNING id;")).rows[0].id;
+        // Ensure app_catalogue has a test app
+        await adminClient.query("INSERT INTO app_catalogue (app_key, name, description) VALUES ('app_vfy_seats', 'Seat App', 'Desc') ON CONFLICT (app_key) DO NOTHING;");
+        await adminClient.query(
+            "INSERT INTO organisation_seats (organisation_id, app_key, role_key, seat_limit, allocated_seats) VALUES ($1, 'app_vfy_seats', 'business_owner', 5, 0);",
+            [oIdSeats]
+        );
 
-        // Over-allocating seats must fail check constraint
-        try {
-            await adminClient.query("UPDATE entitlements SET allocated_seats = 6 WHERE id = $1;", [eId]);
-            record(file5, 'enforces chk_seat_limit constraint when over-allocating', false);
-        } catch (e: any) {
-            record(file5, 'enforces chk_seat_limit constraint when over-allocating', e.code === '23514');
-        }
+        // Failure check: over-allocating seats beyond seat_limit
+        await assertSavepointFailure(
+            adminClient, file5,
+            'enforces chk_seats_allocated_lte_limit when allocated_seats > seat_limit',
+            () => adminClient.query("UPDATE organisation_seats SET allocated_seats = 6 WHERE organisation_id = $1 AND app_key = 'app_vfy_seats';", [oIdSeats]),
+            '23514', 'chk_seats_allocated_lte_limit'
+        );
 
-        // Valid update succeeds
-        await adminClient.query("UPDATE entitlements SET allocated_seats = 3 WHERE id = $1;", [eId]);
-        const alloc = (await adminClient.query("SELECT allocated_seats FROM entitlements WHERE id = $1;", [eId])).rows[0].allocated_seats;
-        record(file5, 'allows allocated_seats update within limits', alloc === 3);
-    } catch (e: any) {
-        record(file5, 'Suite 05 execution', false, e.message);
-    } finally {
-        await adminClient.query('ROLLBACK;').catch(() => {});
-    }
+        // Positive control: allocating within seat_limit succeeds
+        await assertSavepointControl(
+            adminClient, file5,
+            'chk_seats_allocated_lte_limit allows allocation within seat_limit',
+            () => adminClient.query("UPDATE organisation_seats SET allocated_seats = 3 WHERE organisation_id = $1 AND app_key = 'app_vfy_seats';", [oIdSeats])
+        );
+        await adminClient.query('ROLLBACK TO SAVEPOINT sp_suite5;');
 
-    // =========================================================================
-    // Suite 06: Immutable Audit Log
-    // =========================================================================
-    const file6 = '06_immutable_audit';
-    try {
-        await adminClient.query('BEGIN;');
-        // 6.1 UPDATE on audit_logs blocked by trigger
-        try {
-            await adminClient.query("UPDATE audit_logs SET action = 'ALTERED';");
-            record(file6, 'blocks UPDATE on audit_logs via trigger', false);
-        } catch (e: any) {
-            record(file6, 'blocks UPDATE on audit_logs via trigger', e.message.includes('append-only'));
-        }
+        // =========================================================================
+        // Suite 06: Immutable Audit Log
+        // =========================================================================
+        const file6 = '06_immutable_audit';
+        await adminClient.query('SAVEPOINT sp_suite6;');
+        const auditRowId = (await adminClient.query(
+            "INSERT INTO audit_logs (action, target_entity, target_id) VALUES ('TC_VERIFY_LOG', 'system', 'sys1') RETURNING id;"
+        )).rows[0].id;
 
-        // 6.2 DELETE on audit_logs blocked by trigger
-        try {
-            await adminClient.query("DELETE FROM audit_logs;");
-            record(file6, 'blocks DELETE on audit_logs via trigger', false);
-        } catch (e: any) {
-            record(file6, 'blocks DELETE on audit_logs via trigger', e.message.includes('append-only'));
-        }
+        await assertSavepointFailure(
+            adminClient, file6,
+            'blocks UPDATE on audit_logs via trg_audit_logs_immutable_update trigger',
+            () => adminClient.query("UPDATE audit_logs SET action = 'ALTERED' WHERE id = $1;", [auditRowId]),
+            'P0001', 'append-only'
+        );
 
-        // 6.3 TRUNCATE on audit_logs blocked by trigger
-        try {
-            await adminClient.query("TRUNCATE audit_logs;");
-            record(file6, 'blocks TRUNCATE on audit_logs via trigger', false);
-        } catch (e: any) {
-            record(file6, 'blocks TRUNCATE on audit_logs via trigger', e.code === '42501' || e.message.includes('append-only'));
-        }
+        await assertSavepointFailure(
+            adminClient, file6,
+            'blocks DELETE on audit_logs via trg_audit_logs_immutable_delete trigger',
+            () => adminClient.query("DELETE FROM audit_logs WHERE id = $1;", [auditRowId]),
+            'P0001', 'append-only'
+        );
 
-        // 6.4 Runtime role denied UPDATE by privilege revocation
-        try {
-            await runtimeClient.query("UPDATE audit_logs SET action = 'HACKED';");
-            record(file6, 'runtime role denied UPDATE on audit_logs by privilege revocation', false);
-        } catch (e: any) {
-            record(file6, 'runtime role denied UPDATE on audit_logs by privilege revocation', e.code === '42501');
-        }
-    } catch (e: any) {
-        record(file6, 'Suite 06 execution', false, e.message);
-    } finally {
-        await adminClient.query('ROLLBACK;').catch(() => {});
-    }
+        await assertSavepointFailure(
+            adminClient, file6,
+            'blocks TRUNCATE on audit_logs',
+            () => adminClient.query("TRUNCATE audit_logs;"),
+            'P0001'
+        );
 
-    // =========================================================================
-    // Suite 07: Runtime Role Privilege Proofs
-    // =========================================================================
-    const file7 = '07_runtime_privilege_proof';
-    try {
-        // 7.1 Runtime role has no admin flags
+        await assertSavepointFailure(
+            runtimeClient, file6,
+            'runtime role denied UPDATE on audit_logs by privilege revocation (42501)',
+            () => runtimeClient.query("UPDATE audit_logs SET action = 'HACKED';"),
+            '42501'
+        );
+        await adminClient.query('ROLLBACK TO SAVEPOINT sp_suite6;');
+
+        // =========================================================================
+        // Suite 07: Runtime Role Privilege Proofs
+        // =========================================================================
+        const file7 = '07_runtime_privilege_proof';
         const roleFlags = (await adminClient.query("SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = 'archscale_app_runtime';")).rows[0];
         const isLeastPrivilege = !roleFlags.rolsuper && !roleFlags.rolbypassrls && !roleFlags.rolcreaterole && !roleFlags.rolcreatedb;
         record(file7, 'runtime role has no administrative flags (NO SUPERUSER, NO BYPASSRLS)', isLeastPrivilege);
 
-        // 7.2 Runtime role cannot CREATE TABLE (isolated transaction rollback)
-        try {
-            await runtimeClient.query('BEGIN;');
-            await runtimeClient.query("CREATE TABLE public.hack_table (id serial primary key);");
-            record(file7, 'runtime role cannot CREATE TABLE in schema public', false);
-        } catch (e: any) {
-            record(file7, 'runtime role cannot CREATE TABLE in schema public', e.code === '42501');
-        } finally {
-            await runtimeClient.query('ROLLBACK;').catch(() => {});
-        }
+        await assertSavepointFailure(
+            runtimeClient, file7,
+            'runtime role cannot CREATE TABLE in schema public (42501)',
+            () => runtimeClient.query("CREATE TABLE public.hack_table (id serial primary key);"),
+            '42501'
+        );
 
-        // 7.3 Workspaces without context returns 0 rows via RLS
         const wsRows = (await runtimeClient.query("SELECT * FROM workspaces;")).rows;
         record(file7, 'runtime role querying workspaces without context returns 0 rows (RLS)', wsRows.length === 0);
 
-        // 7.4 fn_set_app_context rejects forged context id
-        try {
-            await runtimeClient.query("SELECT fn_set_app_context('00000000-0000-0000-0000-000000000000');");
-            record(file7, 'fn_set_app_context rejects forged context id', false);
-        } catch (e: any) {
-            record(file7, 'fn_set_app_context rejects forged context id', e.code === 'P0001');
-        }
+        await assertSavepointFailure(
+            runtimeClient, file7,
+            'fn_set_app_context rejects forged context id',
+            () => runtimeClient.query("SELECT fn_set_app_context('00000000-0000-0000-0000-000000000000');"),
+            'P0001', 'ARCHSCALE_INVALID_CONTEXT'
+        );
 
-        // 7.5 Runtime role holds EXECUTE on fn_set_app_context
         const hasExec = (await adminClient.query("SELECT has_function_privilege('archscale_app_runtime', 'fn_set_app_context(UUID)', 'EXECUTE');")).rows[0].has_function_privilege;
         record(file7, 'runtime role holds EXECUTE on fn_set_app_context', hasExec === true);
-    } catch (e: any) {
-        record(file7, 'Suite 07 execution', false, e.message);
+
+    } finally {
+        // ALWAYS rollback all writes performed by verification suite
+        await adminClient.query('ROLLBACK;').catch(() => {});
+        await adminClient.end();
+        await runtimeClient.end();
     }
 
     // Report Summary
@@ -397,18 +475,5 @@ export async function runStagingVerification(): Promise<boolean> {
     console.log(`Verification Total: ${totalPassed} passed, ${totalFailed} failed.`);
     console.log(`================================================================\n`);
 
-    await adminClient.end();
-    await runtimeClient.end();
-
     return totalFailed === 0;
-}
-
-// Direct execution
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
-    runStagingVerification().then(success => {
-        if (!success) process.exit(1);
-    }).catch(err => {
-        console.error('Fatal execution error:', err.message);
-        process.exit(1);
-    });
 }
