@@ -48,6 +48,11 @@ async function main() {
 
         // On Supabase, postgres must be granted the role before SET LOCAL ROLE is allowed
         await client.query('GRANT archscale_app_runtime TO postgres;');
+
+        // Query an existing auth user while connected as admin (before switching to runtime role)
+        const authUserRes = await client.query('SELECT id, email FROM auth.users LIMIT 1;');
+        const existingAuthUser = authUserRes.rows[0];
+
         await client.query('SET LOCAL ROLE archscale_app_runtime;');
         console.log('[2/5] Switched to role archscale_app_runtime (SET LOCAL ROLE).');
 
@@ -88,20 +93,41 @@ async function main() {
         console.log(`  - Unknown AS- code resolves to: ${resCodeUnknown.rows[0].fn_resolve_user_code}`);
         console.log(`  - Non-AS pattern resolves to: ${resCodeNonAs.rows[0].fn_resolve_user_code}`);
 
-        // Check 5: fn_upsert_user_mirror and immutable email
-        const testUserId = '80000000-0000-0000-0000-000000000001';
-        const upsert1 = await client.query(
-            `SELECT * FROM fn_upsert_user_mirror($1, 'dryrun.user@archscale.test', 'AS-DRYRUN01', '+1-555-0100');`,
-            [testUserId]
-        );
-        console.log(`  - Initial fn_upsert_user_mirror: email="${upsert1.rows[0].email}" code="${upsert1.rows[0].user_code}"`);
+        // Check 5: fn_upsert_user_mirror with unauthorized id (not in auth.users)
+        await client.query('SAVEPOINT sp_unauth;');
+        let unauthErr = '';
+        try {
+            await client.query(`SELECT * FROM fn_upsert_user_mirror('80000000-0000-0000-0000-000000000001', 'unauth@archscale.test');`);
+        } catch (e: any) {
+            unauthErr = e.message;
+        } finally {
+            await client.query('ROLLBACK TO SAVEPOINT sp_unauth;');
+        }
+        console.log(`[5a/6] Unauthorized auth.users rejection: "${unauthErr}" (Expected rejection)`);
 
-        // Try rewriting email on conflict
-        const upsertConflict = await client.query(
-            `SELECT * FROM fn_upsert_user_mirror($1, 'attacker.hijack@archscale.test', NULL, '+1-555-0999');`,
-            [testUserId]
-        );
-        console.log(`  - Conflict fn_upsert_user_mirror (attempted email change): email="${upsertConflict.rows[0].email}" phone="${upsertConflict.rows[0].phone}" (email remained unchanged)`);
+        // Check 6: fn_upsert_user_mirror with verified auth.users user
+        if (existingAuthUser) {
+            const upsert1 = await client.query(
+                `SELECT * FROM fn_upsert_user_mirror($1, $2, '+1-555-0100');`,
+                [existingAuthUser.id, existingAuthUser.email]
+            );
+            console.log(`[5b/6] Valid auth.users upsert: email="${upsert1.rows[0].email}" server_code="${upsert1.rows[0].user_code}"`);
+
+            // Try rewriting email on conflict
+            await client.query('SAVEPOINT sp_conflict;');
+            let conflictErr = '';
+            try {
+                await client.query(
+                    `SELECT * FROM fn_upsert_user_mirror($1, 'attacker.hijack@archscale.test', '+1-555-0999');`,
+                    [existingAuthUser.id]
+                );
+            } catch (e: any) {
+                conflictErr = e.message;
+            } finally {
+                await client.query('ROLLBACK TO SAVEPOINT sp_conflict;');
+            }
+            console.log(`[5c/6] Conflict email change attempt rejected: "${conflictErr}"`);
+        }
 
         // Reset role before rollback
         await client.query('RESET ROLE;');
