@@ -89,11 +89,16 @@ export function createServer() {
         const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
         const pathname = url.pathname;
         const method = req.method?.toUpperCase();
-        const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+        const clientIp = req.socket.remoteAddress || '127.0.0.1';
 
         try {
-            // Serve demo UI
+            // Serve demo UI only if ARCHSCALE_DEMO === 'true'
             if (pathname === '/' || pathname === '/demo' || pathname === '/demo.html') {
+                if (process.env.ARCHSCALE_DEMO !== 'true') {
+                    res.writeHead(404, { 'Content-Type': 'text/plain' });
+                    res.end('Not Found');
+                    return;
+                }
                 const demoPath = path.join(__dirname, 'public', 'index.html');
                 if (fs.existsSync(demoPath)) {
                     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

@@ -22,3 +22,6 @@ Items deferred from Phase 1 close-out and Phase 2 Step 2. Not started unless a l
 
 7. **Member directory (org-wide membership reads)**  
    Org-wide membership reads need a permission-gated definer function (e.g. `org.members.read`) rather than open or broad table SELECT on `memberships`. Deferred to Step 3.
+
+8. **business_owner MFA not enforced in the demo**  
+   In Seed 001, `business_owner` is configured with `min_aal = 'aal2'`. For local development and Phase 2 demo scenarios, business_owner MFA is not enforced in the demo so testers can exercise standard single-factor login paths without requiring live TOTP setup. Full self-service MFA enrollment and enforcement will be completed in Phase 4.
