@@ -48,19 +48,24 @@ async function delayToFloor(startMs: number, floorMs: number = 1000) {
 function readBody(req: http.IncomingMessage, maxSize: number = 100 * 1024): Promise<any> {
     return new Promise((resolve, reject) => {
         let size = 0;
+        let rejected = false;
         const chunks: Buffer[] = [];
         req.on('data', chunk => {
+            if (rejected) return;
             size += chunk.length;
             if (size > maxSize) {
+                rejected = true;
                 const err = new Error('PAYLOAD_TOO_LARGE');
                 (err as any).statusCode = 413;
                 reject(err);
-                req.destroy();
+                // Pause instead of destroy so response can be sent cleanly before connection closes
+                req.pause();
                 return;
             }
             chunks.push(chunk);
         });
         req.on('end', () => {
+            if (rejected) return;
             const raw = Buffer.concat(chunks).toString('utf-8');
             if (!raw) {
                 resolve({});
@@ -72,7 +77,9 @@ function readBody(req: http.IncomingMessage, maxSize: number = 100 * 1024): Prom
                 reject(new Error('INVALID_JSON'));
             }
         });
-        req.on('error', reject);
+        req.on('error', err => {
+            if (!rejected) reject(err);
+        });
     });
 }
 
@@ -84,8 +91,9 @@ function sendJson(res: http.ServerResponse, statusCode: number, data: any) {
     res.end(JSON.stringify(data));
 }
 
-export function createServer() {
-    const idp = getIdentityProvider();
+export function createServer(customIdp?: any, customRuntimePool?: any) {
+    const idp = customIdp || getIdentityProvider();
+    const dbPool = customRuntimePool || runtimePool;
 
     return http.createServer(async (req, res) => {
         const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -224,7 +232,10 @@ export function createServer() {
 
             // POST /api/session/logout
             if (pathname === '/api/session/logout' && method === 'POST') {
-                const body = await readBody(req);
+                let body: any = {};
+                try {
+                    body = await readBody(req);
+                } catch {}
                 const contextId = body.contextId || req.headers['x-archscale-context'];
                 if (contextId && typeof contextId === 'string') {
                     await revokeAccessContext(contextId, principal.id, principal.sessionId).catch(() => {});
@@ -241,8 +252,16 @@ export function createServer() {
                 return sendJson(res, 401, { error: 'AUTH_CONTEXT_REQUIRED' });
             }
 
-            // Execute within database context using withAppContext
-            return await withAppContext(contextId, principal.id, principal.sessionId, async client => {
+            // Execute within database context
+            const client = await dbPool.connect();
+            try {
+                await client.query('BEGIN;');
+                await client.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [
+                    contextId,
+                    principal.id,
+                    principal.sessionId
+                ]);
+
                 // GET /api/me
                 if (pathname === '/api/me' && method === 'GET') {
                     // /api/me requires only a valid context, no specific route permission
@@ -318,7 +337,10 @@ export function createServer() {
 
                 // Protected Sample 3: POST /api/org/invitations
                 if (pathname === '/api/org/invitations' && method === 'POST') {
-                    const body = await readBody(req);
+                    let body: any = {};
+                    try {
+                        body = await readBody(req);
+                    } catch {}
                     const decision = await decide(client, principal, contextId, 'org.members.invite', { isMutation: true });
                     if (!decision.allow) {
                         return sendJson(res, 403, { decision });
@@ -334,7 +356,10 @@ export function createServer() {
                 }
 
                 return sendJson(res, 404, { error: 'NOT_FOUND' });
-            });
+            } finally {
+                await client.query('COMMIT;').catch(() => {});
+                client.release();
+            }
         } catch (err: any) {
             return sendJson(res, 500, { error: 'INTERNAL_SERVER_ERROR', message: err.message });
         }

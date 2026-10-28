@@ -187,7 +187,8 @@ export async function decide(
     }
 
     // Gate 6: Role is permitted for organisation's tenant type
-    if (row.tenant_type_key) {
+    // Support contexts represent platform staff entering a subscriber tenant under a grant, so they are exempt from subscriber role_tenant_types mapping
+    if (row.tenant_type_key && !row.support_grant_id) {
         const tenantTypeCheck = await client.query(
             `SELECT 1 FROM public.role_tenant_types WHERE role_key = $1 AND tenant_type_key = $2;`,
             [row.role_key, row.tenant_type_key]

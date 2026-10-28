@@ -92,7 +92,7 @@ beforeAll(async () => {
         INSERT INTO public.role_permissions (role_key, permission_key)
         VALUES 
             ('business_owner', 'org.members.read'),
-            ('founder', 'platform.orgs.read')
+            ('founder', 'platform.organisations.read')
         ON CONFLICT DO NOTHING;
     `);
 
@@ -302,6 +302,43 @@ describe('Authorization Denial Gates (decide)', () => {
 
             // Restore membership
             await client.query(`UPDATE public.memberships SET expires_at = NULL WHERE id = $1;`, [membershipAliceId]);
+        } finally {
+            client.release();
+        }
+    });
+
+    it('Gate 2: Fails on suspended membership', async () => {
+        const client = await adminPool.connect();
+        try {
+            // Add a second business_owner to satisfy custodian protection trigger before suspending Alice
+            await client.query(`
+                INSERT INTO public.memberships (organisation_id, user_id, role_key, status)
+                VALUES ($1, $2, 'business_owner', 'ACTIVE')
+                ON CONFLICT (user_id, organisation_id) DO NOTHING;
+            `, [SUBSCRIBER_ORG_ID, USER_BOB_ID]);
+
+            // Suspend Alice's membership
+            await client.query(`UPDATE public.memberships SET status = 'SUSPENDED' WHERE id = $1;`, [membershipAliceId]);
+
+            const principal: VerifiedPrincipal = {
+                id: USER_ALICE_ID,
+                email: 'alice@test.local',
+                sessionId: SESSION_ALICE,
+                aal: 'aal1',
+                issuer: 'test',
+                audience: 'test',
+                expiresAt: Math.floor(Date.now() / 1000) + 3600
+            };
+            const decision = await decide(client, principal, validContextId, 'org.members.read');
+            expect(decision.allow).toBe(false);
+            if (!decision.allow) {
+                expect(decision.gateFailed).toBe(2);
+                expect(decision.reasonCode).toBe('AUTH_MEMBERSHIP');
+            }
+
+            // Restore Alice's membership
+            await client.query(`UPDATE public.memberships SET status = 'ACTIVE' WHERE id = $1;`, [membershipAliceId]);
+            await client.query(`DELETE FROM public.memberships WHERE organisation_id = $1 AND user_id = $2;`, [SUBSCRIBER_ORG_ID, USER_BOB_ID]);
         } finally {
             client.release();
         }
