@@ -257,7 +257,7 @@ export class SupabaseProvider implements IdentityProvider {
         }
     }
 
-    private async equalizeTiming(startTime: number, minMs = 250): Promise<void> {
+    private async equalizeTiming(startTime: number, minMs = 450): Promise<void> {
         const elapsed = Date.now() - startTime;
         if (elapsed < minMs) {
             await new Promise(resolve => setTimeout(resolve, minMs - elapsed));
