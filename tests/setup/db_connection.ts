@@ -23,14 +23,10 @@ if (fs.existsSync(envPath)) {
     }
 }
 
-const testDbUrl = process.env.ARCHSCALE_TEST_DB_URL;
-if (!testDbUrl) {
-    throw new Error(
-        'Missing ARCHSCALE_TEST_DB_URL in .env. Local tests require ARCHSCALE_TEST_DB_URL to be set (e.g. postgresql://<user>:<password>@127.0.0.1:<port>/postgres).'
-    );
-}
+import { assertLocalTestDatabaseGuard } from '../../src/db/index.js';
 
-const parsedUrl = new URL(testDbUrl);
+const testDbUrl = process.env.ARCHSCALE_TEST_DB_URL;
+const parsedUrl = assertLocalTestDatabaseGuard(testDbUrl);
 
 export const DB_CONFIG: pg.PoolConfig = {
     host: parsedUrl.hostname,
