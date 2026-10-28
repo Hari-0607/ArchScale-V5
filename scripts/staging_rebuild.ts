@@ -228,10 +228,10 @@ export async function stagingRebuildPlan(dryRunOnly = true) {
         const dropTriggers: string[] = [];
         const keepTriggers: string[] = [];
         for (const trg of stagingTriggers.rows) {
-            if (trg.name.includes('ensure_rls') || trg.name === 'trg_ensure_rls') {
-                keepTriggers.push(`${trg.name} ON ${trg.table}`);
+            if (trg.tgname.includes('ensure_rls') || trg.tgname === 'trg_ensure_rls') {
+                keepTriggers.push(`${trg.tgname} ON ${trg.relname}`);
             } else {
-                dropTriggers.push(`${trg.name} ON ${trg.table}`);
+                dropTriggers.push(`${trg.tgname} ON ${trg.relname}`);
             }
         }
 
@@ -296,7 +296,7 @@ export async function stagingRebuildPlan(dryRunOnly = true) {
     }
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
     stagingRebuildPlan(true).catch(err => {
         console.error('Fatal Rebuild Plan Error:', err.message);
         process.exit(1);
