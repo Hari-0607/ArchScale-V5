@@ -33,10 +33,12 @@ BEGIN
 END $$;
 
 -- -----------------------------------------------------------------------------
--- 2. Revoke all direct table privileges on public.users from the runtime role.
---    All access must flow through the SECURITY DEFINER functions below.
+-- 2. Revoke direct write privileges; grant SELECT so the RLS policy can evaluate.
+--    The context-bound RLS policy (Section 5) restricts SELECT to the caller's own row.
+--    Direct INSERT and UPDATE remain completely revoked.
 -- -----------------------------------------------------------------------------
 REVOKE ALL PRIVILEGES ON public.users FROM archscale_app_runtime;
+GRANT SELECT ON public.users TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
 -- 3. fn_resolve_user_code
@@ -100,6 +102,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+#variable_conflict use_column
 DECLARE
     v_code TEXT;
 BEGIN
