@@ -45,7 +45,7 @@ beforeAll(async () => {
         email: 'server.test@archscale.local',
         userCode: 'AS-SRVR01',
         password: 'test-password',
-        aal: 'aal1'
+        aal: 'aal2'
     });
     localIdp.registerTestUser({
         id: USER_OTHER_ID,
@@ -127,7 +127,7 @@ beforeAll(async () => {
 
     // Create active context via adminPool
     const ctxRes = await adminPool.query<{ fn_create_access_context: string }>(
-        `SELECT fn_create_access_context($1::uuid, $2::text, $3::uuid, $4::uuid, 'aal1');`,
+        `SELECT fn_create_access_context($1::uuid, $2::text, $3::uuid, $4::uuid, 'aal2');`,
         [USER_TEST_ID, verified.sessionId, ORG_A_ID, workspaceId]
     );
     validContextId = ctxRes.rows[0].fn_create_access_context;
@@ -316,5 +316,180 @@ describe('HTTP Server Integration Tests (LocalProvider)', () => {
         };
 
         expect(() => validateRegistry(undeclaredRoutes)).toThrowError(/Undeclared or invalid route kind for orphan.route/);
+    });
+
+    it('9. Parameter / header injection does not change allow/deny decision; foreign context ID is denied', async () => {
+        // (a) Injection in JSON body and headers (e.g. attempting to claim role='founder' or fake orgId)
+        // User other is intern in Org A, so org.members.invite must be DENIED regardless of injected role or org
+        await adminPool.query(`
+            INSERT INTO public.memberships (organisation_id, user_id, role_key, status, expires_at)
+            VALUES ($1, $2, 'intern', 'ACTIVE', now() + INTERVAL '30 days')
+            ON CONFLICT (user_id, organisation_id) DO UPDATE SET role_key = 'intern', expires_at = now() + INTERVAL '30 days';
+        `, [ORG_A_ID, USER_OTHER_ID]);
+
+        const otherLogin = await localIdp.signIn({
+            email: 'server.other@archscale.local',
+            password: 'test-password'
+        });
+        const otherToken = otherLogin.accessToken;
+        const otherVerified = await localIdp.verify(otherToken);
+
+        const otherCtxRes = await adminPool.query<{ fn_create_access_context: string }>(
+            `SELECT fn_create_access_context($1::uuid, $2::text, $3::uuid, $4::uuid, 'aal1');`,
+            [USER_OTHER_ID, otherVerified.sessionId, ORG_A_ID, workspaceId]
+        );
+        const otherCtxId = otherCtxRes.rows[0].fn_create_access_context;
+
+        const injectionRes = await fetch(`${baseUrl}/api/org/invitations`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${otherToken}`,
+                'X-ArchScale-Context': otherCtxId,
+                'X-Role': 'founder',
+                'X-Organisation-Id': '00000000-0000-0000-0000-000000000001'
+            },
+            body: JSON.stringify({
+                role: 'founder',
+                roleKey: 'founder',
+                organisationId: '00000000-0000-0000-0000-000000000001',
+                email: 'injected@test.local'
+            })
+        });
+        expect(injectionRes.status).toBe(403);
+        const injectionBody = await injectionRes.json();
+        expect(injectionBody.error).toBe('AUTH_PERMISSION');
+
+        // (b) Valid context id belonging to another user sent in X-ArchScale-Context is denied
+        // USER_TEST_ID sends otherCtxId (which belongs to USER_OTHER_ID)
+        const foreignCtxRes = await fetch(`${baseUrl}/api/org/members`, {
+            headers: {
+                'Authorization': `Bearer ${validAccessToken}`,
+                'X-ArchScale-Context': otherCtxId
+            }
+        });
+        expect(foreignCtxRes.status).toBe(403);
+    });
+
+    it('10. MFA verify route: wrong code returns 401, correct code upgrades token to aal2, elevating platform route from 403 to 200', async () => {
+        // Clear rate limiter for local tests before beginning
+        const { clearRateLimit } = await import('../../src/server/index.js');
+        clearRateLimit('127.0.0.1');
+        clearRateLimit('::ffff:127.0.0.1');
+
+        // Register founder in localIdp with MFA factor
+        const FOUNDER_ID = '50000000-0000-0000-0000-000000000099';
+        localIdp.registerTestUser({
+            id: FOUNDER_ID,
+            email: 'founder@archscale.local',
+            userCode: 'AS-FNDR99',
+            password: 'founder-password',
+            aal: 'aal1',
+            hasMfaFactor: true
+        });
+
+        // Mirror in database (execute statements individually)
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, 'founder@archscale.local') ON CONFLICT DO NOTHING;`, [FOUNDER_ID]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, 'AS-FNDR99', 'founder@archscale.local') ON CONFLICT DO NOTHING;`, [FOUNDER_ID]);
+        await adminPool.query(`INSERT INTO public.memberships (organisation_id, user_id, role_key, status) VALUES ('00000000-0000-0000-0000-000000000001', $1, 'founder', 'ACTIVE') ON CONFLICT DO NOTHING;`, [FOUNDER_ID]);
+
+        const platWsRes = await adminPool.query(`
+            INSERT INTO public.workspaces (organisation_id, name, is_active)
+            VALUES ('00000000-0000-0000-0000-000000000001', 'Founder WS', true) RETURNING id;
+        `);
+        const platWsId = platWsRes.rows[0].id;
+
+        // Sign in: returns aal1 token with mfaRequired: true
+        const loginRes = await fetch(`${baseUrl}/api/session/sign-in`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'founder@archscale.local', password: 'founder-password' })
+        });
+        const loginData = await loginRes.json();
+        expect(loginRes.status).toBe(200);
+        expect(loginData.principal.aal).toBe('aal1');
+        expect(loginData.mfaRequired).toBe(true);
+        const aal1Token = loginData.accessToken;
+
+        // Context at aal1
+        const ctxAal1Res = await fetch(`${baseUrl}/api/session/context`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${aal1Token}`
+            },
+            body: JSON.stringify({
+                organisationId: '00000000-0000-0000-0000-000000000001',
+                workspaceId: platWsId
+            })
+        });
+        const ctxAal1Data = await ctxAal1Res.json();
+        if (ctxAal1Res.status !== 200) {
+            console.error('Failed creating platform context at aal1:', ctxAal1Res.status, ctxAal1Data);
+        }
+        expect(ctxAal1Res.status).toBe(200);
+        const ctxAal1Id = ctxAal1Data.context.id;
+
+        // Founder at aal1 tries platform route: DENIED (AUTH_AAL)
+        const platDenyRes = await fetch(`${baseUrl}/api/platform/organisations`, {
+            headers: {
+                'Authorization': `Bearer ${aal1Token}`,
+                'X-ArchScale-Context': ctxAal1Id
+            }
+        });
+        expect(platDenyRes.status).toBe(403);
+        const platDenyBody = await platDenyRes.json();
+        expect(platDenyBody.error).toBe('AUTH_AAL');
+
+        // MFA verify with wrong code: 401
+        const wrongMfaRes = await fetch(`${baseUrl}/api/session/mfa/verify`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${aal1Token}`
+            },
+            body: JSON.stringify({ code: '000000' })
+        });
+        expect(wrongMfaRes.status).toBe(401);
+        const wrongMfaBody = await wrongMfaRes.json();
+        expect(wrongMfaBody.error).toBe('AUTH_MFA_FAILED');
+
+        // MFA verify with correct code ('123456'): 200 and aal2 token
+        const correctMfaRes = await fetch(`${baseUrl}/api/session/mfa/verify`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${aal1Token}`
+            },
+            body: JSON.stringify({ code: '123456' })
+        });
+        expect(correctMfaRes.status).toBe(200);
+        const mfaData = await correctMfaRes.json();
+        expect(mfaData.aal).toBe('aal2');
+        const aal2Token = mfaData.accessToken;
+
+        // Create context with aal2 token
+        const ctxAal2Res = await fetch(`${baseUrl}/api/session/context`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${aal2Token}`
+            },
+            body: JSON.stringify({
+                organisationId: '00000000-0000-0000-0000-000000000001',
+                workspaceId: platWsId
+            })
+        });
+        const ctxAal2Data = await ctxAal2Res.json();
+        const ctxAal2Id = ctxAal2Data.context.id;
+
+        // Founder at aal2 calls platform route: ALLOWED (200)
+        const platAllowRes = await fetch(`${baseUrl}/api/platform/organisations`, {
+            headers: {
+                'Authorization': `Bearer ${aal2Token}`,
+                'X-ArchScale-Context': ctxAal2Id
+            }
+        });
+        expect(platAllowRes.status).toBe(200);
     });
 });

@@ -33,7 +33,7 @@ function recordFailedAttempt(ip: string) {
     }
 }
 
-function clearRateLimit(ip: string) {
+export function clearRateLimit(ip: string) {
     failedAttempts.delete(ip);
 }
 
@@ -146,10 +146,21 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
                         password: body.password
                     });
                     clearRateLimit(clientIp);
+
+                    // Check if user has verified MFA factors
+                    let mfaRequired = false;
+                    try {
+                        const mfaStatus = await idp.getMfaStatus(session.principal.id);
+                        mfaRequired = mfaStatus.factors.some(f => f.status === 'verified') && session.principal.aal !== 'aal2';
+                    } catch {
+                        mfaRequired = false;
+                    }
+
                     return sendJson(res, 200, {
                         accessToken: session.accessToken,
                         refreshToken: session.refreshToken,
-                        principal: session.principal
+                        principal: session.principal,
+                        mfaRequired
                     });
                 } catch (err) {
                     recordFailedAttempt(clientIp);
@@ -171,6 +182,63 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
                 principal = await idp.verify(token);
             } catch {
                 return sendJson(res, 401, { error: 'AUTH_TOKEN_INVALID' });
+            }
+
+            // POST /api/session/mfa/verify
+            if (pathname === '/api/session/mfa/verify' && method === 'POST') {
+                const start = Date.now();
+                if (!checkRateLimit(clientIp)) {
+                    await delayToFloor(start, 1000);
+                    return sendJson(res, 429, { error: 'AUTH_RATE_LIMIT_EXCEEDED' });
+                }
+
+                let body: any;
+                try {
+                    body = await readBody(req);
+                } catch (err: any) {
+                    if (err.statusCode === 413) {
+                        return sendJson(res, 413, { error: 'PAYLOAD_TOO_LARGE' });
+                    }
+                    return sendJson(res, 400, { error: 'INVALID_REQUEST' });
+                }
+
+                const code = body?.code;
+                if (!code || typeof code !== 'string') {
+                    recordFailedAttempt(clientIp);
+                    await delayToFloor(start, 1000);
+                    return sendJson(res, 401, { error: 'AUTH_MFA_FAILED' });
+                }
+
+                try {
+                    const mfaStatus = await idp.getMfaStatus(principal.id);
+                    const verifiedFactor = mfaStatus.factors.find(f => f.status === 'verified');
+                    if (!verifiedFactor) {
+                        recordFailedAttempt(clientIp);
+                        await delayToFloor(start, 1000);
+                        return sendJson(res, 401, { error: 'AUTH_MFA_FAILED' });
+                    }
+
+                    const challenge = await idp.challengeMfa(verifiedFactor.id);
+                    const verification = await (idp as any).verifyMfa(
+                        verifiedFactor.id,
+                        challenge.id,
+                        code,
+                        principal.sessionId,
+                        principal.id,
+                        principal.email
+                    );
+
+                    clearRateLimit(clientIp);
+                    return sendJson(res, 200, {
+                        accessToken: verification.accessToken,
+                        refreshToken: verification.refreshToken,
+                        aal: verification.aal
+                    });
+                } catch {
+                    recordFailedAttempt(clientIp);
+                    await delayToFloor(start, 1000);
+                    return sendJson(res, 401, { error: 'AUTH_MFA_FAILED' });
+                }
             }
 
             // GET /api/session/memberships
@@ -208,7 +276,7 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
                         workspaceId: body.workspaceId,
                         aal: principal.aal === 'aal2' ? 'aal2' : 'aal1',
                         supportGrantId: body.supportGrantId
-                    });
+                    }, dbPool);
                     return sendJson(res, 200, { context });
                 } catch (err: any) {
                     return sendJson(res, 400, { error: err.message || 'AUTH_CONTEXT_CREATE_FAILED' });
@@ -223,7 +291,7 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
                     return sendJson(res, 400, { error: 'AUTH_CONTEXT_REQUIRED' });
                 }
                 try {
-                    const context = await renewAccessContext(contextId, principal.id, principal.sessionId);
+                    const context = await renewAccessContext(contextId, principal.id, principal.sessionId, dbPool);
                     return sendJson(res, 200, { context });
                 } catch (err: any) {
                     return sendJson(res, 400, { error: err.message || 'AUTH_CONTEXT_RENEW_FAILED' });

@@ -19,8 +19,8 @@ export interface ContextResult {
  * User ID and Session ID MUST be passed from the cryptographic identity token,
  * never from untrusted client request bodies.
  */
-export async function createAccessContext(input: CreateContextInput): Promise<ContextResult> {
-    const client = await runtimePool.connect();
+export async function createAccessContext(input: CreateContextInput, pool: any = runtimePool): Promise<ContextResult> {
+    const client = await pool.connect();
     try {
         const res = await client.query<{ fn_create_access_context: string }>(
             `SELECT fn_create_access_context(
@@ -73,9 +73,10 @@ export async function createAccessContext(input: CreateContextInput): Promise<Co
 export async function renewAccessContext(
     contextId: string,
     userId: string,
-    sessionId: string
+    sessionId: string,
+    pool: any = runtimePool
 ): Promise<ContextResult> {
-    const client = await runtimePool.connect();
+    const client = await pool.connect();
     try {
         const res = await client.query<{
             context_id: string;

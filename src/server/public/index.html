@@ -135,6 +135,20 @@
             <div id="signin-status" class="status-box" style="display:none;"></div>
         </div>
 
+        <!-- 1b. MFA Verification (if factor enrolled) -->
+        <div class="card" id="step-mfa" style="display:none;">
+            <h2>1b. Two-Factor Authentication (AAL2 Required)</h2>
+            <p style="font-size: 14px; color: #94a3b8;">
+                Enter the 6-digit TOTP code from your authenticator app.
+            </p>
+            <div class="form-group">
+                <label for="mfa-code">6-Digit Code</label>
+                <input type="text" id="mfa-code" maxlength="6" placeholder="123456" />
+            </div>
+            <button id="btn-mfa-verify">Verify MFA Code</button>
+            <div id="mfa-status" class="status-box" style="display:none;"></div>
+        </div>
+
         <!-- 2. Organisation & Workspace Selection -->
         <div class="card" id="step-context" style="display:none;">
             <h2>2. Select Organisation & Workspace</h2>
@@ -214,9 +228,46 @@
                 state.accessToken = data.accessToken;
                 statusEl.textContent = 'Authenticated successfully as ' + escapeHtml(data.principal.email) + ' (AAL: ' + escapeHtml(data.principal.aal) + ')';
 
+                if (data.mfaRequired) {
+                    document.getElementById('step-mfa').style.display = 'block';
+                    document.getElementById('step-context').style.display = 'none';
+                    return;
+                }
+
                 loadMemberships();
             } catch (err) {
                 statusEl.textContent = 'Network or sign-in error';
+            }
+        });
+
+        // MFA verify handler
+        document.getElementById('btn-mfa-verify').addEventListener('click', async () => {
+            const code = document.getElementById('mfa-code').value.trim();
+            const mfaStatusEl = document.getElementById('mfa-status');
+            mfaStatusEl.style.display = 'block';
+            mfaStatusEl.textContent = 'Verifying TOTP code...';
+
+            try {
+                const res = await fetch('/api/session/mfa/verify', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + state.accessToken
+                    },
+                    body: JSON.stringify({ code })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    mfaStatusEl.textContent = 'MFA verification failed: ' + (data.error || 'Invalid code');
+                    return;
+                }
+
+                state.accessToken = data.accessToken;
+                mfaStatusEl.textContent = 'MFA verified successfully (Upgraded to AAL2).';
+                document.getElementById('step-mfa').style.display = 'none';
+                loadMemberships();
+            } catch {
+                mfaStatusEl.textContent = 'Network error during MFA verify';
             }
         });
 

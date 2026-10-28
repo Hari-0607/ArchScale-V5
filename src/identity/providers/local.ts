@@ -76,9 +76,11 @@ export class LocalProvider implements IdentityProvider {
         password: string;
         aal?: AalLevel;
         totpSecret?: string;
+        hasMfaFactor?: boolean;
     }): LocalUser {
         const id = user.id || crypto.randomUUID();
         const hash = this.hashPassword(user.password);
+        const hasFactor = user.hasMfaFactor ?? (user.aal === 'aal2');
         const localUser: LocalUser = {
             id,
             email: user.email.toLowerCase(),
@@ -86,7 +88,7 @@ export class LocalProvider implements IdentityProvider {
             passwordHash: hash,
             aal: user.aal || 'aal1',
             totpSecret: user.totpSecret,
-            factors: user.aal === 'aal2' ? [{
+            factors: hasFactor ? [{
                 id: `factor_${crypto.randomBytes(4).toString('hex')}`,
                 friendlyName: 'Authenticator App',
                 factorType: 'totp',
