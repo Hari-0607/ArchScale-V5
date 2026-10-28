@@ -78,12 +78,9 @@ beforeAll(async () => {
     );
     validContextId = ctxRes.rows[0].id;
 
-    // Connect as runtime role (uses local password from db_connection.ts)
+    // Connect as runtime role (uses dynamic RUNTIME_CONFIG from db_connection.ts)
     const runtimeConfig = {
-        host: '127.0.0.1',
-        port: 5432,
-        user: 'archscale_app_runtime',
-        password: 'archscale_runtime_local_pass',
+        ...RUNTIME_CONFIG,
         database: 'archscale_test_012'
     };
     runtimeClient = new pg.Client(runtimeConfig);
