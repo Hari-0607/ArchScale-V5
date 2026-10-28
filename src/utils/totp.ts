@@ -44,3 +44,4 @@ export function generateTotpCode(secret: string, timestampSeconds: number = Math
     const otp = (binary % 1_000_000).toString();
     return otp.padStart(6, '0');
 }
+

@@ -162,3 +162,4 @@ This runbook documents the exact flow to exercise the Phase 2 authentication and
   - `X-ArchScale-Context: <CONTEXT_UUID>`
 - **Response**: `200 OK`
 - Subsequent calls with the same token or context return `401 Unauthorized`.
+

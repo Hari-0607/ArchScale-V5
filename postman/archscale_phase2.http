@@ -82,3 +82,4 @@ X-ArchScale-Context: {{contextId}}
 POST {{baseUrl}}/api/session/logout
 Authorization: Bearer {{aal2Token}}
 X-ArchScale-Context: {{contextId}}
+

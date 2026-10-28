@@ -341,3 +341,4 @@ describe.runIf(isStagingEnabled)('Staging Authorization & MFA Integration Tests'
         expect(afterTokenCall.status).toBe(401);
     });
 });
+
