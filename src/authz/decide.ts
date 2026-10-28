@@ -249,9 +249,7 @@ export async function decide(
 
     if (aalRes.rowCount && aalRes.rowCount > 0) {
         const { role_min_aal, perm_min_aal } = aalRes.rows[0];
-        // Note per Backlog Item 8: business_owner MFA is deferred for local demo
-        const effectiveRoleMinAal = row.role_key === 'business_owner' ? 'aal1' : role_min_aal;
-        const requiredAal = (effectiveRoleMinAal === 'aal2' || perm_min_aal === 'aal2') ? 'aal2' : 'aal1';
+        const requiredAal = (role_min_aal === 'aal2' || perm_min_aal === 'aal2') ? 'aal2' : 'aal1';
         if (requiredAal === 'aal2' && row.aal !== 'aal2') {
             return deny(8, 'AUTH_AAL', `Operation requires AAL2 (role requires ${role_min_aal}, permission requires ${perm_min_aal}, current is ${row.aal})`);
         }

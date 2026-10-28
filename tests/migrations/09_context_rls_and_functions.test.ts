@@ -345,15 +345,118 @@ describe('Migration 013: Context RLS and Authz Functions [Local]', () => {
             SELECT schemaname, tablename, policyname, qual
             FROM pg_policies
             WHERE schemaname = 'public'
-              AND qual LIKE '%current_setting%';
+              AND (qual LIKE '%current_setting%' OR qual LIKE '%archscale%');
         `);
 
-        // Every policy using current_setting must also check is_context_valid or call fn_current_context_*
+        // If any policy references current_setting or archscale directly in qual, it must use is_context_valid or fn_current_context_*
         for (const p of policies.rows) {
             const hasValidityCheck =
                 p.qual.includes('is_context_valid') ||
                 p.qual.includes('fn_current_context');
-            expect(hasValidityCheck).toBe(true);
+            expect(hasValidityCheck, `Policy ${p.tablename}.${p.policyname} references archscale GUC without validation: ${p.qual}`).toBe(true);
         }
+
+        // Also test that injecting a rogue policy with bare current_setting fails this invariant check
+        const rogueQual = "current_setting('archscale.current_context_id', true) = 'foo'";
+        const isSafe = rogueQual.includes('is_context_valid') || rogueQual.includes('fn_current_context');
+        expect(isSafe).toBe(false);
+    });
+
+    it('13. fn_set_app_context refuses context when organisation is SUSPENDED, membership is SUSPENDED, or support grant is REVOKED', async () => {
+        // Setup fixture organisation
+        const orgRes = await adminPool.query(`
+            INSERT INTO public.organisations (name, portal, tenant_type_key, status)
+            VALUES ('Suspension Test Org', 'subscriber', 'studio_owner', 'ACTIVE')
+            RETURNING id;
+        `);
+        const orgId = orgRes.rows[0].id;
+
+        const wsRes = await adminPool.query(`
+            INSERT INTO public.workspaces (organisation_id, name, is_active)
+            VALUES ($1, 'Suspension Test WS', true)
+            RETURNING id;
+        `, [orgId]);
+        const wsId = wsRes.rows[0].id;
+
+        // Entitlement required for subscriber organisation
+        await adminPool.query(`
+            INSERT INTO public.organisation_entitlements (organisation_id, app_key, is_enabled)
+            VALUES ($1, 'core_billing', true);
+        `, [orgId]);
+
+        // User and membership (intern requires expires_at)
+        const memRes = await adminPool.query(`
+            INSERT INTO public.memberships (organisation_id, user_id, role_key, status, expires_at)
+            VALUES ($1, $2, 'intern', 'ACTIVE', now() + INTERVAL '30 days')
+            RETURNING id;
+        `, [orgId, USER_B_ID]);
+        const memId = memRes.rows[0].id;
+
+        // Context 1: will test org suspension
+        const ctx1Res = await adminPool.query<{ fn_create_access_context: string }>(`
+            SELECT fn_create_access_context($1::uuid, 'sess_susp_1', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_B_ID, orgId, wsId]);
+        const ctx1Id = ctx1Res.rows[0].fn_create_access_context;
+
+        // Now suspend organisation
+        await adminPool.query(`UPDATE public.organisations SET status = 'SUSPENDED' WHERE id = $1;`, [orgId]);
+
+        // Attempting to fn_set_app_context on ctx1 must fail
+        await runtimeClient.query('BEGIN;');
+        await expect(
+            runtimeClient.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [ctx1Id, USER_B_ID, 'sess_susp_1'])
+        ).rejects.toThrow(/ARCHSCALE_INVALID_CONTEXT/);
+        await runtimeClient.query('ROLLBACK;');
+
+        // Reactivate organisation
+        await adminPool.query(`UPDATE public.organisations SET status = 'ACTIVE' WHERE id = $1;`, [orgId]);
+
+        // Context 2: will test membership suspension
+        const ctx2Res = await adminPool.query<{ fn_create_access_context: string }>(`
+            SELECT fn_create_access_context($1::uuid, 'sess_susp_2', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_B_ID, orgId, wsId]);
+        const ctx2Id = ctx2Res.rows[0].fn_create_access_context;
+
+        // Suspend membership
+        await adminPool.query(`UPDATE public.memberships SET status = 'SUSPENDED' WHERE id = $1;`, [memId]);
+
+        // Attempting to fn_set_app_context on ctx2 must fail
+        await runtimeClient.query('BEGIN;');
+        await expect(
+            runtimeClient.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [ctx2Id, USER_B_ID, 'sess_susp_2'])
+        ).rejects.toThrow(/ARCHSCALE_INVALID_CONTEXT/);
+        await runtimeClient.query('ROLLBACK;');
+
+        // Reactivate membership
+        await adminPool.query(`UPDATE public.memberships SET status = 'ACTIVE' WHERE id = $1;`, [memId]);
+
+        // Context 3: Support grant revoked
+        const grantRes = await adminPool.query(`
+            INSERT INTO public.support_access_grants (
+                grantor_user_id, grantee_user_id, organisation_id, reason, expires_at
+            ) VALUES (
+                $1, $2, $3, 'Test support grant for revocation check', now() + INTERVAL '2 hours'
+            ) RETURNING id;
+        `, [USER_A_ID, STAFF_USER_ID, SUBSCRIBER_ORG_ID]);
+        const grantId = grantRes.rows[0].id;
+
+        const staffCtxRes = await adminPool.query<{ fn_create_access_context: string }>(`
+            SELECT fn_create_access_context($1::uuid, 'sess_staff_rev', $2::uuid, $3::uuid, 'aal2', $4::uuid);
+        `, [STAFF_USER_ID, SUBSCRIBER_ORG_ID, workspaceAId, grantId]);
+        const staffCtxId = staffCtxRes.rows[0].fn_create_access_context;
+
+        // Revoke support grant
+        await adminPool.query(`
+            UPDATE public.support_access_grants
+            SET revoked_at = now(), revoked_by_user_id = $1, revoke_reason = 'Grant revoked in test'
+            WHERE id = $2;
+        `, [USER_A_ID, grantId]);
+
+        // Attempting to fn_set_app_context on staffCtxId must fail
+        await runtimeClient.query('BEGIN;');
+        await expect(
+            runtimeClient.query('SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);', [staffCtxId, STAFF_USER_ID, 'sess_staff_rev'])
+        ).rejects.toThrow(/ARCHSCALE_INVALID_CONTEXT/);
+        await runtimeClient.query('ROLLBACK;');
     });
 });
