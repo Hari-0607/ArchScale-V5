@@ -428,7 +428,7 @@ describe('HTTP Server Integration Tests (LocalProvider)', () => {
             console.error('Failed creating platform context at aal1:', ctxAal1Res.status, ctxAal1Data);
         }
         expect(ctxAal1Res.status).toBe(200);
-        const ctxAal1Id = ctxAal1Data.context.id;
+        const ctxAal1Id = ctxAal1Data.context.contextId;
 
         // Founder at aal1 tries platform route: DENIED (AUTH_AAL)
         const platDenyRes = await fetch(`${baseUrl}/api/platform/organisations`, {
