@@ -71,7 +71,11 @@ describe('Timing: failure path spread across staging (real Supabase Auth)', () =
         // Also seed the mirror row via admin DB for user_code resolution test
         const adminDb = new pg.Client({ connectionString: config.supabaseDbAdminUrl, ssl: { rejectUnauthorized: false } });
         await adminDb.connect();
-        await adminDb.query(`SELECT fn_upsert_user_mirror($1, $2, $3, NULL);`, [timingUserId, TIMING_TEST_EMAIL, TIMING_USER_CODE]);
+        try {
+            await adminDb.query(`SELECT fn_upsert_user_mirror($1, $2, $3, NULL);`, [timingUserId, TIMING_TEST_EMAIL, TIMING_USER_CODE]);
+        } catch {
+            await adminDb.query(`INSERT INTO public.users (id, email, user_code) VALUES ($1, $2, $3);`, [timingUserId, TIMING_TEST_EMAIL, TIMING_USER_CODE]);
+        }
         await adminDb.end();
     });
 
@@ -91,6 +95,8 @@ describe('Timing: failure path spread across staging (real Supabase Auth)', () =
             return;
         }
 
+        const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+
         const timingsA: number[] = []; // Unknown email
         const timingsB: number[] = []; // Unresolved AS-... code
         const timingsC: number[] = []; // Wrong password, real user
@@ -102,6 +108,7 @@ describe('Timing: failure path spread across staging (real Supabase Auth)', () =
                 await provider.signIn({ email: `TEST-unknown-timing-${i}@archscale.test`, password: 'WrongPass123!' });
             } catch { /* expected */ }
             timingsA.push(Date.now() - t0);
+            await sleep(250);
         }
 
         // Path B: unresolved AS-... code
@@ -111,6 +118,7 @@ describe('Timing: failure path spread across staging (real Supabase Auth)', () =
                 await provider.signIn({ userCode: `AS-DOESNOTEXIST-${i}`, password: 'WrongPass123!' });
             } catch { /* expected */ }
             timingsB.push(Date.now() - t0);
+            await sleep(250);
         }
 
         // Path C: wrong password for real registered user
@@ -120,6 +128,7 @@ describe('Timing: failure path spread across staging (real Supabase Auth)', () =
                 await provider.signIn({ email: TIMING_TEST_EMAIL, password: 'CompletelyWrongPassword999!' });
             } catch { /* expected */ }
             timingsC.push(Date.now() - t0);
+            await sleep(250);
         }
 
         const medA = median(timingsA);
