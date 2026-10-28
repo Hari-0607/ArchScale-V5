@@ -58,8 +58,8 @@ describe('SupabaseProvider Staging Integration Suite (Real Supabase Auth)', () =
     }
 
     beforeAll(async () => {
-        if (config.env !== 'staging') {
-            console.warn('[skip] Supabase staging integration tests: ARCHSCALE_ENV is not staging.');
+        if (config.env !== 'staging' || process.env.ARCHSCALE_STAGING_TESTS !== 'true') {
+            console.warn('[skip] Supabase staging integration tests: Requires ARCHSCALE_ENV=staging and ARCHSCALE_STAGING_TESTS=true.');
             return;
         }
 
@@ -90,9 +90,10 @@ describe('SupabaseProvider Staging Integration Suite (Real Supabase Auth)', () =
         }
         testUserId = data.user.id;
 
-        // Pre-seed mirror row in public.users via fn_upsert_user_mirror
+        // Pre-seed mirror row in public.users via admin connection
         await adminDbClient.query(
-            `SELECT fn_upsert_user_mirror($1, $2, $3, NULL);`,
+            `INSERT INTO public.users (id, email, user_code) VALUES ($1, $2, $3)
+             ON CONFLICT (id) DO UPDATE SET user_code = EXCLUDED.user_code;`,
             [testUserId, TEST_EMAIL, TEST_USER_CODE]
         );
     });

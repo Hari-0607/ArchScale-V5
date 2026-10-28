@@ -53,7 +53,7 @@ describe('Timing: failure path spread across staging (real Supabase Auth)', () =
     let timingUserId: string | null = null;
 
     beforeAll(async () => {
-        if (config.env !== 'staging') return;
+        if (config.env !== 'staging' || process.env.ARCHSCALE_STAGING_TESTS !== 'true') return;
 
         provider = new SupabaseProvider();
         adminSupabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
@@ -72,11 +72,10 @@ describe('Timing: failure path spread across staging (real Supabase Auth)', () =
         const adminDb = new pg.Client({ connectionString: config.supabaseDbAdminUrl, ssl: { rejectUnauthorized: false } });
         await adminDb.connect();
         try {
-            await adminDb.query(`SELECT fn_upsert_user_mirror($1, $2, $3, NULL);`, [timingUserId, TIMING_TEST_EMAIL, TIMING_USER_CODE]);
-        } catch {
-            await adminDb.query(`INSERT INTO public.users (id, email, user_code) VALUES ($1, $2, $3);`, [timingUserId, TIMING_TEST_EMAIL, TIMING_USER_CODE]);
+            await adminDb.query(`INSERT INTO public.users (id, email, user_code) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET user_code = EXCLUDED.user_code;`, [timingUserId, TIMING_TEST_EMAIL, TIMING_USER_CODE]);
+        } finally {
+            await adminDb.end().catch(() => {});
         }
-        await adminDb.end();
     });
 
     afterAll(async () => {
@@ -90,8 +89,8 @@ describe('Timing: failure path spread across staging (real Supabase Auth)', () =
     });
 
     it(`measures ${RUNS} runs per path and asserts median spread <= ${TOLERANCE_MS}ms`, async () => {
-        if (config.env !== 'staging') {
-            console.warn('[skip] timing test requires staging env');
+        if (config.env !== 'staging' || process.env.ARCHSCALE_STAGING_TESTS !== 'true') {
+            console.warn('[skip] timing test requires staging env and ARCHSCALE_STAGING_TESTS=true');
             return;
         }
 
