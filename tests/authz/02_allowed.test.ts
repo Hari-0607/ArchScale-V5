@@ -370,17 +370,17 @@ describe('02_allowed: Verification of Allowed Authorization Paths and Scopes', (
             const { ROUTE_PERMISSIONS } = await import('../../src/config/route_permissions.js');
             const routePermKeys = Array.from(new Set(Object.values(ROUTE_PERMISSIONS)));
 
-            const res = await client.query<{ permission_key: string; role_count: string }>(`
-                SELECT p.permission_key, COUNT(rp.role_key) AS role_count
+            const res = await client.query<{ key: string; role_count: string }>(`
+                SELECT p.key, COUNT(rp.role_key) AS role_count
                 FROM public.permissions p
-                LEFT JOIN public.role_permissions rp ON rp.permission_key = p.permission_key
-                WHERE p.permission_key = ANY($1::text[])
-                GROUP BY p.permission_key;
+                LEFT JOIN public.role_permissions rp ON rp.permission_key = p.key
+                WHERE p.key = ANY($1::text[])
+                GROUP BY p.key;
             `, [routePermKeys]);
 
             const foundKeys = new Map<string, number>();
             for (const row of res.rows) {
-                foundKeys.set(row.permission_key, parseInt(row.role_count, 10));
+                foundKeys.set(row.key, parseInt(row.role_count, 10));
             }
 
             for (const requiredPerm of routePermKeys) {
