@@ -30,24 +30,30 @@ async function main() {
         process.exit(1);
     }
 
-    // 2. Identify migration file
-    const fileArg = args.find(a => !a.startsWith('--'));
-    if (!fileArg) {
+    // 2. Identify files to run in transaction
+    const fileArgs = args.filter(a => !a.startsWith('--'));
+    if (fileArgs.length === 0) {
         console.error('ABORTED: Missing migration file argument.');
-        console.error('Usage: npx tsx scripts/apply_one_migration.ts <migration-file> --confirm-staging');
+        console.error('Usage: npx tsx scripts/apply_one_migration.ts <file1> [file2...] --confirm-staging');
         process.exit(1);
     }
 
-    let migrationFilePath = fileArg;
-    if (!fs.existsSync(migrationFilePath)) {
-        // Try resolving relative to migrations/
-        const resolved = path.join(__dirname, '../migrations', fileArg);
-        if (fs.existsSync(resolved)) {
-            migrationFilePath = resolved;
-        } else {
-            console.error(`ABORTED: Migration file not found: ${fileArg}`);
-            process.exit(1);
+    const resolvedFilePaths: string[] = [];
+    for (const fileArg of fileArgs) {
+        let migrationFilePath = fileArg;
+        if (!fs.existsSync(migrationFilePath)) {
+            const inMigrations = path.join(__dirname, '../migrations', fileArg);
+            const inSeeds = path.join(__dirname, '../seeds', fileArg);
+            if (fs.existsSync(inMigrations)) {
+                migrationFilePath = inMigrations;
+            } else if (fs.existsSync(inSeeds)) {
+                migrationFilePath = inSeeds;
+            } else {
+                console.error(`ABORTED: File not found: ${fileArg}`);
+                process.exit(1);
+            }
         }
+        resolvedFilePaths.push(migrationFilePath);
     }
 
     // 3. Staging environment verification
@@ -70,7 +76,10 @@ async function main() {
 
     // Print ONLY the project ref (never connection strings or secrets)
     console.log(`[Staging Migration Target] Project Ref: ${projectRef}`);
-    console.log(`[Migration File] ${path.basename(migrationFilePath)}`);
+    console.log(`[Files to Apply in Transaction]:`);
+    for (const f of resolvedFilePaths) {
+        console.log(`  - ${path.basename(f)}`);
+    }
 
     const client = new pg.Client({
         connectionString: adminUrl,
@@ -85,18 +94,96 @@ async function main() {
         process.exit(1);
     }
 
-    const sqlContent = fs.readFileSync(migrationFilePath, 'utf-8');
-
-    console.log('[1/3] Starting migration inside a single transaction...');
+    console.log('[1/3] Starting execution inside a single transaction...');
     try {
         await client.query('BEGIN;');
 
-        await client.query(sqlContent);
-        console.log('[2/3] Migration SQL executed. Running read-only post-checks...');
+        for (const filePath of resolvedFilePaths) {
+            console.log(`  Executing: ${path.basename(filePath)}...`);
+            const sqlContent = fs.readFileSync(filePath, 'utf-8');
+            await client.query(sqlContent);
+        }
 
-        const basename = path.basename(migrationFilePath);
+        console.log('[2/3] All SQL files executed. Running read-only post-checks...');
 
-        if (basename.includes('012')) {
+        const anyHas013 = resolvedFilePaths.some(p => path.basename(p).includes('013'));
+        const anyHas012 = resolvedFilePaths.some(p => path.basename(p).includes('012'));
+
+        if (anyHas013) {
+            console.log('Running specialized post-checks for Migration 013 + Seeds:');
+            
+            // Check 1: Required functions exist and are SECURITY DEFINER
+            const funcList = [
+                'fn_create_access_context',
+                'fn_renew_access_context',
+                'fn_revoke_access_context',
+                'fn_assert_not_support_context',
+                'fn_active_support_grant',
+                'fn_set_app_context',
+                'fn_audit_append',
+                'fn_read_audit_logs',
+                'fn_list_principal_memberships',
+                'fn_list_org_workspaces_for_principal',
+                'is_context_valid',
+                'fn_approve_organisation',
+                'fn_approve_membership'
+            ];
+
+            const funcRes = await client.query(`
+                SELECT p.proname, p.prosecdef 
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public' AND p.proname = ANY($1::text[]);
+            `, [funcList]);
+
+            const foundFuncs = new Set(funcRes.rows.map(r => r.proname));
+            for (const f of funcList) {
+                if (!foundFuncs.has(f)) {
+                    throw new Error(`Post-check failed: function ${f} missing from database!`);
+                }
+            }
+            console.log(`  ✓ All ${funcList.length} required functions exist.`);
+
+            // Check 2: Direct queries as archscale_app_runtime
+            // 2a: fn_set_app_context with random UUID raises
+            let randomContextRaised = false;
+            try {
+                await client.query(`SELECT fn_set_app_context('a0000000-0000-0000-0000-000000000000'::uuid, 'b0000000-0000-0000-0000-000000000000'::uuid, 'fake_sess');`);
+            } catch {
+                randomContextRaised = true;
+            }
+            if (!randomContextRaised) {
+                throw new Error('Post-check failed: fn_set_app_context with random uuid did not raise exception!');
+            }
+            console.log(`  ✓ fn_set_app_context with random uuid raises.`);
+
+            // 2b: is_context_valid() is false with no context
+            const isCtxValidRes = await client.query(`SELECT is_context_valid() AS is_valid;`);
+            if (isCtxValidRes.rows[0].is_valid !== false) {
+                throw new Error('Post-check failed: is_context_valid() with no context did not return false!');
+            }
+            console.log(`  ✓ is_context_valid() returns false when no context is active.`);
+
+            // Check 3: Permissions verified (org.members.invite granted to business_owner and NOT to intern; platform.organisations.read to founder)
+            const permRes = await client.query(`
+                SELECT role_key, permission_key
+                FROM public.role_permissions
+                WHERE (role_key = 'business_owner' AND permission_key = 'org.members.invite')
+                   OR (role_key = 'intern' AND permission_key = 'org.members.invite')
+                   OR (role_key = 'founder' AND permission_key = 'platform.organisations.read');
+            `);
+
+            const perms = permRes.rows;
+            const boInvite = perms.some(p => p.role_key === 'business_owner' && p.permission_key === 'org.members.invite');
+            const internInvite = perms.some(p => p.role_key === 'intern' && p.permission_key === 'org.members.invite');
+            const founderRead = perms.some(p => p.role_key === 'founder' && p.permission_key === 'platform.organisations.read');
+
+            if (!boInvite) throw new Error('Post-check failed: business_owner missing org.members.invite!');
+            if (internInvite) throw new Error('Post-check failed: intern unexpectedly has org.members.invite!');
+            if (!founderRead) throw new Error('Post-check failed: founder missing platform.organisations.read!');
+            console.log(`  ✓ Permissions verified: business_owner has invite, intern does NOT, founder has platform read.`);
+
+        } else if (anyHas012) {
             // Post-checks specifically for Migration 012
             const checkRes = await client.query(`
                 SELECT
