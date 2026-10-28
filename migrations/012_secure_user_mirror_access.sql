@@ -91,7 +91,8 @@ GRANT  EXECUTE ON FUNCTION fn_resolve_user_code(TEXT) TO archscale_app_runtime;
 --    Privilege constraints:
 --    - Runtime role cannot choose user_code; generated server-side.
 --    - Seeds and admin tests set specific user codes via admin connection.
---    - If auth.users exists, requires p_id exists there with matching email.
+--    - Requires auth.users to exist; missing relation raises and inserts nothing.
+--    - Requires p_id exists in auth.users with matching email.
 --    - On conflict (id): updates phone and updated_at ONLY.
 --    - p_email and user_code are NEVER updated on conflict.
 -- -----------------------------------------------------------------------------
@@ -129,33 +130,32 @@ BEGIN
             USING ERRCODE = 'P0001';
     END IF;
 
-    -- If auth.users exists (Supabase staging or local test stand-in), enforce identity integrity:
+    -- auth.users is required (Supabase staging or local test stand-in).
+    -- Do not skip this check: a missing relation must raise so nothing is inserted.
     -- 1. p_id must exist in auth.users
     -- 2. p_email must match the email in auth.users
     -- 3. p_email cannot belong to another user in auth.users
-    IF to_regclass('auth.users') IS NOT NULL THEN
-        EXECUTE 'SELECT email FROM auth.users WHERE id = $1'
-        INTO v_auth_email
-        USING p_id;
+    EXECUTE 'SELECT email FROM auth.users WHERE id = $1'
+    INTO v_auth_email
+    USING p_id;
 
-        IF v_auth_email IS NULL THEN
-            RAISE EXCEPTION 'fn_upsert_user_mirror: p_id % does not exist in auth.users', p_id
-                USING ERRCODE = 'P0001';
-        END IF;
+    IF v_auth_email IS NULL THEN
+        RAISE EXCEPTION 'fn_upsert_user_mirror: p_id % does not exist in auth.users', p_id
+            USING ERRCODE = 'P0001';
+    END IF;
 
-        IF lower(trim(v_auth_email)) <> lower(trim(p_email)) THEN
-            RAISE EXCEPTION 'fn_upsert_user_mirror: email mismatch with auth.users for p_id %', p_id
-                USING ERRCODE = 'P0001';
-        END IF;
+    IF lower(trim(v_auth_email)) <> lower(trim(p_email)) THEN
+        RAISE EXCEPTION 'fn_upsert_user_mirror: email mismatch with auth.users for p_id %', p_id
+            USING ERRCODE = 'P0001';
+    END IF;
 
-        EXECUTE 'SELECT id FROM auth.users WHERE lower(trim(email)) = lower(trim($1)) AND id <> $2 LIMIT 1'
-        INTO v_email_owner
-        USING p_email, p_id;
+    EXECUTE 'SELECT id FROM auth.users WHERE lower(trim(email)) = lower(trim($1)) AND id <> $2 LIMIT 1'
+    INTO v_email_owner
+    USING p_email, p_id;
 
-        IF v_email_owner IS NOT NULL THEN
-            RAISE EXCEPTION 'fn_upsert_user_mirror: email % belongs to another user in auth.users', p_email
-                USING ERRCODE = 'P0001';
-        END IF;
+    IF v_email_owner IS NOT NULL THEN
+        RAISE EXCEPTION 'fn_upsert_user_mirror: email % belongs to another user in auth.users', p_email
+            USING ERRCODE = 'P0001';
     END IF;
 
     -- Generate server-side user code (runtime role cannot supply or manipulate this)

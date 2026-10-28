@@ -220,6 +220,26 @@ describe('Migration 012: Secure User Mirror Access [local]', () => {
         await adminPool.query('DELETE FROM auth.users WHERE id = $1;', [idC]);
     });
 
+    it('7d. fn_upsert_user_mirror: missing auth.users raises and inserts nothing', async () => {
+        const ghostId = '90000000-0000-0000-0000-000000000009';
+        const ghostEmail = 'missing.auth@archscale.test';
+        const before = await adminPool.query<{ n: number }>('SELECT count(*)::int AS n FROM public.users;');
+
+        await adminPool.query('ALTER TABLE auth.users RENAME TO users_hidden_012;');
+        try {
+            await expect(
+                runtimeClient.query('SELECT * FROM fn_upsert_user_mirror($1, $2);', [ghostId, ghostEmail])
+            ).rejects.toThrow(/auth\.users/);
+
+            const after = await adminPool.query<{ n: number }>('SELECT count(*)::int AS n FROM public.users;');
+            expect(after.rows[0].n).toBe(before.rows[0].n);
+            const inserted = await adminPool.query('SELECT 1 FROM public.users WHERE id = $1;', [ghostId]);
+            expect(inserted.rows.length).toBe(0);
+        } finally {
+            await adminPool.query('ALTER TABLE IF EXISTS auth.users_hidden_012 RENAME TO users;');
+        }
+    });
+
     it('8. Single reused connection: valid-context returns own row; subsequent no-context returns 0 rows and NO error', async () => {
         // Step A: In an isolated transaction on runtimeClient, set valid context
         await runtimeClient.query('BEGIN;');
