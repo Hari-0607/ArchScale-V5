@@ -52,7 +52,7 @@ CREATE OR REPLACE FUNCTION fn_resolve_user_code(p_code TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_email TEXT;
@@ -102,7 +102,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 #variable_conflict use_column
 DECLARE
@@ -169,7 +169,7 @@ RETURNS UUID
 LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_ctx_id UUID;

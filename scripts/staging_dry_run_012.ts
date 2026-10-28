@@ -46,7 +46,8 @@ async function main() {
         await client.query(sql012);
         console.log('[1/5] Migration 012 applied cleanly inside transaction.');
 
-        // Run SQL-level checks as archscale_app_runtime
+        // On Supabase, postgres must be granted the role before SET LOCAL ROLE is allowed
+        await client.query('GRANT archscale_app_runtime TO postgres;');
         await client.query('SET LOCAL ROLE archscale_app_runtime;');
         console.log('[2/5] Switched to role archscale_app_runtime (SET LOCAL ROLE).');
 
