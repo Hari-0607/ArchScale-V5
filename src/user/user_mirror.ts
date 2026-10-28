@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import pg from 'pg';
 import { runtimePool } from '../db/index.js';
 import { VerifiedPrincipal } from '../identity/types.js';
 
@@ -24,39 +23,48 @@ export class AuthenticationError extends Error {
 }
 
 /**
- * Normalizes identifier input.
- * Accepts an AS-... user_code alias or an email.
+ * Resolves an AS-... user_code alias to a sign-in email via
+ * fn_resolve_user_code (SECURITY DEFINER, search_path = public, pg_temp).
+ *
+ * The function returns NULL for unknown codes; this function returns a random
+ * dummy email so all failure paths take the same code path downstream.
+ *
+ * Direct raw SELECT on public.users is intentionally absent here.
  */
 export async function resolveUserIdentifier(identifier: string): Promise<string> {
     const trimmed = identifier.trim();
 
-    // Direct email pattern
+    // Direct email — no DB lookup required
     if (trimmed.includes('@')) {
         return trimmed.toLowerCase();
     }
 
-    // User code alias pattern (e.g. AS-FNDR, AS-1001, USR-01)
+    // AS-... user code: call the SECURITY DEFINER resolver
     const client = await runtimePool.connect();
     try {
-        const res = await client.query<{ email: string }>(
-            'SELECT email FROM users WHERE LOWER(user_code) = LOWER($1) LIMIT 1;',
+        const res = await client.query<{ fn_resolve_user_code: string | null }>(
+            'SELECT fn_resolve_user_code($1);',
             [trimmed]
         );
-        if (res.rows.length > 0) {
-            return res.rows[0].email.toLowerCase();
+        const email = res.rows[0]?.fn_resolve_user_code ?? null;
+        if (email) {
+            return email.toLowerCase();
         }
     } finally {
         client.release();
     }
 
-    // Unresolved alias: Return dummy email to prevent timing/enumeration attacks
-    // Downstream signIn will fail with identical timing and generic error
+    // Unresolved: return a deterministic-looking dummy so callers see the same
+    // code path and timing pad as the wrong-password case.
     return `unresolved_${crypto.randomBytes(8).toString('hex')}@archscale.internal`;
 }
 
 /**
- * Creates or synchronizes the public.users mirror record on verified login.
- * Never writes to auth.* schema.
+ * Creates or synchronises the public.users mirror record on verified login
+ * via fn_upsert_user_mirror (SECURITY DEFINER, search_path = public, pg_temp).
+ *
+ * Only writes id, user_code, email, phone — never roles or tenant data.
+ * The INSERT/UPDATE is scoped to the verified principal's own id.
  */
 export async function syncUserMirror(
     principal: VerifiedPrincipal,
@@ -64,36 +72,33 @@ export async function syncUserMirror(
 ): Promise<UserRecord> {
     const client = await runtimePool.connect();
     try {
-        await client.query('BEGIN;');
-
-        // Check if user already exists by ID or email
-        const existing = await client.query<UserRecord>(
-            'SELECT id, user_code as "userCode", email, phone, created_at as "createdAt", updated_at as "updatedAt" FROM users WHERE id = $1 OR email = $2 LIMIT 1;',
-            [principal.id, principal.email.toLowerCase()]
+        const res = await client.query<{
+            id: string;
+            user_code: string;
+            email: string;
+            created_at: Date;
+            updated_at: Date;
+        }>(
+            `SELECT * FROM fn_upsert_user_mirror($1, $2, $3, NULL);`,
+            [
+                principal.id,
+                principal.email.toLowerCase(),
+                customUserCode ?? null
+            ]
         );
 
-        if (existing.rows.length > 0) {
-            await client.query('COMMIT;');
-            return existing.rows[0];
+        if (res.rows.length === 0) {
+            throw new Error(`fn_upsert_user_mirror returned no row for id=${principal.id}`);
         }
 
-        // Generate canonical user_code if not provided (AS-XXXXXX format)
-        const code = customUserCode || `AS-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-
-        const inserted = await client.query<UserRecord>(
-            `INSERT INTO users (id, user_code, email)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (email) DO UPDATE
-             SET updated_at = now()
-             RETURNING id, user_code as "userCode", email, phone, created_at as "createdAt", updated_at as "updatedAt";`,
-            [principal.id, code, principal.email.toLowerCase()]
-        );
-
-        await client.query('COMMIT;');
-        return inserted.rows[0];
-    } catch (err) {
-        await client.query('ROLLBACK;').catch(() => {});
-        throw err;
+        const row = res.rows[0];
+        return {
+            id: row.id,
+            userCode: row.user_code,
+            email: row.email,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at
+        };
     } finally {
         client.release();
     }

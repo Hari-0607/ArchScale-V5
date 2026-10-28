@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { LocalProvider } from '../../src/identity/providers/local.js';
 import { AuthenticationError } from '../../src/user/user_mirror.js';
 
-describe('LocalProvider Identity Unit Tests (LocalProvider & Invariants)', () => {
+describe('[local pre-check] LocalProvider Identity Unit Tests (LocalProvider & Invariants)', () => {
     let provider: LocalProvider;
 
     beforeEach(() => {
