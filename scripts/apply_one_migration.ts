@@ -146,15 +146,19 @@ async function main() {
 
             // Check 2: Direct queries as archscale_app_runtime
             // 2a: fn_set_app_context with random UUID raises
+            // Use SAVEPOINT so raising does not abort the outer transaction block
+            await client.query('SAVEPOINT sp_context_test;');
             let randomContextRaised = false;
             try {
                 await client.query(`SELECT fn_set_app_context('a0000000-0000-0000-0000-000000000000'::uuid, 'b0000000-0000-0000-0000-000000000000'::uuid, 'fake_sess');`);
             } catch {
                 randomContextRaised = true;
+                await client.query('ROLLBACK TO SAVEPOINT sp_context_test;');
             }
             if (!randomContextRaised) {
                 throw new Error('Post-check failed: fn_set_app_context with random uuid did not raise exception!');
             }
+            await client.query('RELEASE SAVEPOINT sp_context_test;');
             console.log(`  ✓ fn_set_app_context with random uuid raises.`);
 
             // 2b: is_context_valid() is false with no context
