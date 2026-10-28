@@ -40,3 +40,4 @@ VALUES
 ON CONFLICT (role_key, permission_key) DO NOTHING;
 
 -- Note: intern and executive explicitly receive NO invite, audit, or platform permissions.
+

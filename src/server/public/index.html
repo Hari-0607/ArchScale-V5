@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArchScale Phase 2 Demo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            margin: 0;
+            padding: 24px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .banner {
+            background: #eab308;
+            color: #0f172a;
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        .card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 18px;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 8px;
+        }
+        .form-group {
+            margin-bottom: 12px;
+        }
+        label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 14px;
+            color: #94a3b8;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px 12px;
+            background: #0f172a;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            color: #f8fafc;
+            box-sizing: border-box;
+        }
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        button.secondary {
+            background: #475569;
+        }
+        button.secondary:hover {
+            background: #334155;
+        }
+        button.danger {
+            background: #dc2626;
+        }
+        button.danger:hover {
+            background: #b91c1c;
+        }
+        .status-box {
+            background: #020617;
+            border: 1px solid #1e293b;
+            border-radius: 4px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-top: 12px;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .badge.allow {
+            background: #15803d;
+            color: #dcfce7;
+        }
+        .badge.deny {
+            background: #b91c1c;
+            color: #fee2e2;
+        }
+        .route-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="banner">
+            Demo only. Final screens come in Phase 5.
+        </div>
+
+        <!-- 1. Authentication -->
+        <div class="card" id="step-signin">
+            <h2>1. Sign In</h2>
+            <div class="form-group">
+                <label for="identifier">Email or User Code</label>
+                <input type="text" id="identifier" placeholder="e.g. user@example.com or AS-XXXXXX" />
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="Password" />
+            </div>
+            <button id="btn-signin">Sign In</button>
+            <div id="signin-status" class="status-box" style="display:none;"></div>
+        </div>
+
+        <!-- 2. Organisation & Workspace Selection -->
+        <div class="card" id="step-context" style="display:none;">
+            <h2>2. Select Organisation & Workspace</h2>
+            <div class="form-group">
+                <label for="org-select">Organisation</label>
+                <select id="org-select"></select>
+            </div>
+            <div class="form-group">
+                <label for="workspace-select">Workspace</label>
+                <select id="workspace-select"></select>
+            </div>
+            <button id="btn-context">Select & Create Context (24h)</button>
+            <div id="context-status" class="status-box" style="display:none;"></div>
+        </div>
+
+        <!-- 3. Protected Route Actions -->
+        <div class="card" id="step-routes" style="display:none;">
+            <h2>3. Call Protected Routes</h2>
+            <p style="font-size: 14px; color: #94a3b8;">
+                Test authorization gates against the selected access context.
+            </p>
+            <div class="route-actions">
+                <button id="btn-route-members">GET /api/org/members</button>
+                <button id="btn-route-invite">POST /api/org/invitations</button>
+                <button id="btn-route-platform">GET /api/platform/organisations</button>
+                <button id="btn-renew" class="secondary">Renew Context</button>
+                <button id="btn-logout" class="danger">Logout</button>
+            </div>
+            <div id="route-status" class="status-box" style="display:none;"></div>
+        </div>
+    </div>
+
+    <script>
+        let state = {
+            accessToken: null,
+            contextId: null,
+            organisations: [],
+            workspaces: []
+        };
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // Sign In handler
+        document.getElementById('btn-signin').addEventListener('click', async () => {
+            const ident = document.getElementById('identifier').value.trim();
+            const password = document.getElementById('password').value;
+            const statusEl = document.getElementById('signin-status');
+            statusEl.style.display = 'block';
+            statusEl.textContent = 'Signing in...';
+
+            const isUserCode = ident.toUpperCase().startsWith('AS-');
+            const payload = {
+                password,
+                ...(isUserCode ? { userCode: ident } : { email: ident })
+            };
+
+            try {
+                const res = await fetch('/api/session/sign-in', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    statusEl.textContent = 'Sign-in failed: ' + (data.error || 'Unknown error');
+                    return;
+                }
+
+                state.accessToken = data.accessToken;
+                statusEl.textContent = 'Authenticated successfully as ' + escapeHtml(data.principal.email) + ' (AAL: ' + escapeHtml(data.principal.aal) + ')';
+
+                loadMemberships();
+            } catch (err) {
+                statusEl.textContent = 'Network or sign-in error';
+            }
+        });
+
+        // Load memberships
+        async function loadMemberships() {
+            const res = await fetch('/api/session/memberships', {
+                headers: { 'Authorization': 'Bearer ' + state.accessToken }
+            });
+            const data = await res.json();
+            state.organisations = data.memberships || [];
+
+            const orgSelect = document.getElementById('org-select');
+            orgSelect.innerHTML = '';
+            state.organisations.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.organisation_id;
+                opt.textContent = m.organisation_name + ' (' + m.role_key + ')';
+                orgSelect.appendChild(opt);
+            });
+
+            document.getElementById('step-context').style.display = 'block';
+            if (state.organisations.length > 0) {
+                loadWorkspaces(state.organisations[0].organisation_id);
+            }
+        }
+
+        document.getElementById('org-select').addEventListener('change', (e) => {
+            loadWorkspaces(e.target.value);
+        });
+
+        // Load workspaces for organisation
+        async function loadWorkspaces(orgId) {
+            const res = await fetch('/api/session/workspaces?organisationId=' + encodeURIComponent(orgId), {
+                headers: { 'Authorization': 'Bearer ' + state.accessToken }
+            });
+            const data = await res.json();
+            state.workspaces = data.workspaces || [];
+
+            const wsSelect = document.getElementById('workspace-select');
+            wsSelect.innerHTML = '';
+            state.workspaces.forEach(w => {
+                const opt = document.createElement('option');
+                opt.value = w.workspace_id;
+                opt.textContent = w.workspace_name;
+                wsSelect.appendChild(opt);
+            });
+        }
+
+        // Create Context
+        document.getElementById('btn-context').addEventListener('click', async () => {
+            const orgId = document.getElementById('org-select').value;
+            const wsId = document.getElementById('workspace-select').value;
+            const statusEl = document.getElementById('context-status');
+            statusEl.style.display = 'block';
+            statusEl.textContent = 'Creating context...';
+
+            try {
+                const res = await fetch('/api/session/context', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + state.accessToken,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ organisationId: orgId, workspaceId: wsId })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    statusEl.textContent = 'Context creation failed: ' + (data.error || 'Unknown error');
+                    return;
+                }
+
+                state.contextId = data.context.id;
+                statusEl.textContent = 'Context active until ' + new Date(data.context.expires_at).toLocaleString();
+                document.getElementById('step-routes').style.display = 'block';
+            } catch (err) {
+                statusEl.textContent = 'Failed to create context';
+            }
+        });
+
+        async function callRoute(path, method = 'GET', body = null) {
+            const statusEl = document.getElementById('route-status');
+            statusEl.style.display = 'block';
+            statusEl.textContent = 'Calling ' + path + '...';
+
+            try {
+                const res = await fetch(path, {
+                    method,
+                    headers: {
+                        'Authorization': 'Bearer ' + state.accessToken,
+                        'X-ArchScale-Context': state.contextId,
+                        ...(body ? { 'Content-Type': 'application/json' } : {})
+                    },
+                    ...(body ? { body: JSON.stringify(body) } : {})
+                });
+
+                const data = await res.json();
+                let output = '';
+                if (data.decision) {
+                    if (data.decision.allow) {
+                        output += '[ALLOWED] Role: ' + escapeHtml(data.decision.roleKey) + ', Portal: ' + escapeHtml(data.decision.portal) + '\n';
+                    } else {
+                        output += '[DENIED] Reason: ' + escapeHtml(data.decision.reasonCode) + ' (Gate ' + data.decision.gateFailed + ')\n';
+                        output += 'Audit Reason: ' + escapeHtml(data.decision.auditReason) + '\n';
+                    }
+                }
+                output += '\nResponse payload:\n' + JSON.stringify(data, null, 2);
+                statusEl.textContent = output;
+            } catch (err) {
+                statusEl.textContent = 'Request failed: ' + err.message;
+            }
+        }
+
+        document.getElementById('btn-route-members').addEventListener('click', () => {
+            callRoute('/api/org/members', 'GET');
+        });
+
+        document.getElementById('btn-route-invite').addEventListener('click', () => {
+            callRoute('/api/org/invitations', 'POST', { email: 'invitee@test.local', roleKey: 'member' });
+        });
+
+        document.getElementById('btn-route-platform').addEventListener('click', () => {
+            callRoute('/api/platform/organisations', 'GET');
+        });
+
+        document.getElementById('btn-renew').addEventListener('click', async () => {
+            const statusEl = document.getElementById('route-status');
+            statusEl.style.display = 'block';
+            statusEl.textContent = 'Renewing context...';
+
+            const res = await fetch('/api/session/context/renew', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + state.accessToken,
+                    'X-ArchScale-Context': state.contextId
+                }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                statusEl.textContent = 'Context renewed successfully until ' + new Date(data.context.expires_at).toLocaleString();
+            } else {
+                statusEl.textContent = 'Renewal denied: ' + (data.error || 'Failed');
+            }
+        });
+
+        document.getElementById('btn-logout').addEventListener('click', async () => {
+            const statusEl = document.getElementById('route-status');
+            statusEl.style.display = 'block';
+            statusEl.textContent = 'Logging out...';
+
+            await fetch('/api/session/logout', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + state.accessToken,
+                    'X-ArchScale-Context': state.contextId
+                }
+            });
+
+            state.accessToken = null;
+            state.contextId = null;
+            statusEl.textContent = 'Logged out. Verifying session termination with /api/me...';
+
+            const meRes = await fetch('/api/me', {
+                headers: {
+                    'Authorization': 'Bearer ' + state.accessToken,
+                    'X-ArchScale-Context': '00000000-0000-0000-0000-000000000000'
+                }
+            });
+            const meData = await meRes.json();
+            statusEl.textContent += '\n/api/me status ' + meRes.status + ': ' + JSON.stringify(meData);
+        });
+    </script>
+</body>
+</html>

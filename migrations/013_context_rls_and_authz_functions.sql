@@ -428,7 +428,7 @@ CREATE OR REPLACE FUNCTION fn_create_access_context(
     p_session_id TEXT,
     p_organisation_id UUID,
     p_workspace_id UUID,
-    p_aal aal_level,
+    p_aal TEXT DEFAULT 'aal1',
     p_support_grant_id UUID DEFAULT NULL
 )
 RETURNS UUID
@@ -444,7 +444,9 @@ DECLARE
     v_grant RECORD;
     v_context_id UUID;
     v_expires_at TIMESTAMPTZ;
+    v_aal aal_level;
 BEGIN
+    v_aal := COALESCE(p_aal::aal_level, 'aal1'::aal_level);
     -- 1. Validate User
     IF p_user_id IS NULL THEN
         RAISE EXCEPTION 'AUTH_CONTEXT_DENIED: Missing user id' USING ERRCODE = 'P0001';
@@ -578,7 +580,7 @@ BEGIN
         p_organisation_id,
         p_workspace_id,
         v_membership.id,
-        COALESCE(p_aal, 'aal1'),
+        COALESCE(v_aal, 'aal1'::aal_level),
         now(),
         v_expires_at,
         p_support_grant_id
@@ -603,7 +605,7 @@ BEGIN
         jsonb_build_object(
             'workspace_id', p_workspace_id,
             'is_support', p_support_grant_id IS NOT NULL,
-            'aal_level', COALESCE(p_aal, 'aal1')
+            'aal_level', v_aal
         )
     );
 
@@ -611,8 +613,8 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION fn_create_access_context(UUID, TEXT, UUID, UUID, aal_level, UUID) FROM PUBLIC;
-GRANT  EXECUTE ON FUNCTION fn_create_access_context(UUID, TEXT, UUID, UUID, aal_level, UUID) TO archscale_app_runtime;
+REVOKE EXECUTE ON FUNCTION fn_create_access_context(UUID, TEXT, UUID, UUID, TEXT, UUID) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_create_access_context(UUID, TEXT, UUID, UUID, TEXT, UUID) TO archscale_app_runtime;
 
 -- Renew Access Context
 CREATE OR REPLACE FUNCTION fn_renew_access_context(
