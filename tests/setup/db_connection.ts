@@ -106,7 +106,8 @@ export async function createIsolatedTestDatabase(testDbName: string): Promise<pg
         '009_least_privilege_runtime_role.sql',
         '010_supabase_staging_compatibility.sql',
         '011_user_mirror_rls_policy.sql',
-        '012_secure_user_mirror_access.sql'
+        '012_secure_user_mirror_access.sql',
+        '013_context_rls_and_authz_functions.sql'
     ];
 
     for (const file of migrationFiles) {
@@ -116,9 +117,18 @@ export async function createIsolatedTestDatabase(testDbName: string): Promise<pg
     }
 
     // Apply seed data
-    const seedPath = path.join(__dirname, '../../seeds/001_seed_initial_data.sql');
-    const seedSql = fs.readFileSync(seedPath, 'utf-8');
-    await testPool.query(seedSql);
+    const seedFiles = [
+        '001_seed_initial_data.sql',
+        '002_phase2_permissions.sql'
+    ];
+
+    for (const seedFile of seedFiles) {
+        const seedPath = path.join(__dirname, '../../seeds', seedFile);
+        if (fs.existsSync(seedPath)) {
+            const seedSql = fs.readFileSync(seedPath, 'utf-8');
+            await testPool.query(seedSql);
+        }
+    }
 
     return testPool;
 }

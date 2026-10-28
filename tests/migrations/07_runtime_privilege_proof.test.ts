@@ -52,22 +52,28 @@ describe('07_runtime_privilege_proof: Least-Privilege Role & Forged-Actor Defens
         ).rejects.toThrow(/must be owner of table organisations/);
     });
 
-    it('proves archscale_app_runtime CANNOT mutate audit_logs directly', async () => {
-        // Insert audit log is allowed
-        const ins = await runtimePool.query<{ id: string }>(
-            `INSERT INTO audit_logs (action, target_entity, target_id)
-             VALUES ('runtime.insert', 'audit', '1') RETURNING id;`
-        );
-        expect(ins.rows.length).toBe(1);
+    it('proves archscale_app_runtime CANNOT mutate or directly read audit_logs', async () => {
+        // Direct INSERT permission is revoked in Migration 013 (must use fn_audit_append)
+        await expect(
+            runtimePool.query(
+                `INSERT INTO audit_logs (action, target_entity, target_id)
+                 VALUES ('runtime.insert', 'audit', '1');`
+            )
+        ).rejects.toThrow(/permission denied for table audit_logs/);
+
+        // Direct SELECT permission is revoked in Migration 013 (must use fn_read_audit_logs)
+        await expect(
+            runtimePool.query('SELECT * FROM audit_logs LIMIT 1;')
+        ).rejects.toThrow(/permission denied for table audit_logs/);
 
         // UPDATE permission is revoked
         await expect(
-            runtimePool.query(`UPDATE audit_logs SET action = 'tampered' WHERE id = '${ins.rows[0].id}';`)
+            runtimePool.query(`UPDATE audit_logs SET action = 'tampered' WHERE id = '00000000-0000-0000-0000-000000000001';`)
         ).rejects.toThrow(/permission denied for table audit_logs/);
 
         // DELETE permission is revoked
         await expect(
-            runtimePool.query(`DELETE FROM audit_logs WHERE id = '${ins.rows[0].id}';`)
+            runtimePool.query(`DELETE FROM audit_logs WHERE id = '00000000-0000-0000-0000-000000000001';`)
         ).rejects.toThrow(/permission denied for table audit_logs/);
 
         // TRUNCATE permission is revoked

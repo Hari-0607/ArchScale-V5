@@ -86,19 +86,30 @@ export const runtimePool = createRuntimePool();
  */
 export async function withAppContext<T>(
     contextId: string,
-    operation: (client: pg.PoolClient) => Promise<T>
+    operationOrUserId: ((client: pg.PoolClient) => Promise<T>) | string,
+    sessionIdOrUndefined?: string,
+    operationWhenFourArgs?: (client: pg.PoolClient) => Promise<T>
 ): Promise<T> {
     const client = await runtimePool.connect();
     try {
         await client.query('BEGIN;');
 
-        // Mandatory first statement: set and validate transaction-local security context
-        await client.query('SELECT fn_set_app_context($1);', [contextId]);
-
-        const result = await operation(client);
-
-        await client.query('COMMIT;');
-        return result;
+        if (typeof operationOrUserId === 'function') {
+            // Legacy 2-argument signature
+            await client.query('SELECT fn_set_app_context($1);', [contextId]);
+            const result = await operationOrUserId(client);
+            await client.query('COMMIT;');
+            return result;
+        } else {
+            // 4-argument signature: contextId, userId, sessionId, operation
+            const userId = operationOrUserId;
+            const sessionId = sessionIdOrUndefined!;
+            const operation = operationWhenFourArgs!;
+            await client.query('SELECT fn_set_app_context($1, $2, $3);', [contextId, userId, sessionId]);
+            const result = await operation(client);
+            await client.query('COMMIT;');
+            return result;
+        }
     } catch (err) {
         await client.query('ROLLBACK;').catch(() => {});
         throw err;
