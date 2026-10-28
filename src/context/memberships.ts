@@ -20,10 +20,10 @@ export interface OrgWorkspace {
  * Pre-context listing of active organisations and memberships for a verified principal.
  * Invokes fn_list_principal_memberships (SECURITY DEFINER, minimal columns).
  */
-export async function listPrincipalMemberships(userId: string): Promise<PrincipalMembership[]> {
+export async function listPrincipalMemberships(userId: string, pool: any = runtimePool): Promise<PrincipalMembership[]> {
     if (!userId) return [];
 
-    const client = await runtimePool.connect();
+    const client = await pool.connect();
     try {
         const res = await client.query<{
             membership_id: string;
@@ -56,11 +56,12 @@ export async function listPrincipalMemberships(userId: string): Promise<Principa
  */
 export async function listOrgWorkspaces(
     userId: string,
-    organisationId: string
+    organisationId: string,
+    pool: any = runtimePool
 ): Promise<OrgWorkspace[]> {
     if (!userId || !organisationId) return [];
 
-    const client = await runtimePool.connect();
+    const client = await pool.connect();
     try {
         const res = await client.query<{
             workspace_id: string;

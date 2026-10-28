@@ -110,9 +110,10 @@ export async function renewAccessContext(
 export async function revokeAccessContext(
     contextId: string,
     userId: string,
-    sessionId: string
+    sessionId: string,
+    pool: any = runtimePool
 ): Promise<boolean> {
-    const client = await runtimePool.connect();
+    const client = await pool.connect();
     try {
         const res = await client.query<{ fn_revoke_access_context: boolean }>(
             `SELECT fn_revoke_access_context($1::uuid, $2::uuid, $3::text);`,

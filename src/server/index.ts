@@ -243,7 +243,7 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
 
             // GET /api/session/memberships
             if (pathname === '/api/session/memberships' && method === 'GET') {
-                const memberships = await listPrincipalMemberships(principal.id);
+                const memberships = await listPrincipalMemberships(principal.id, dbPool);
                 return sendJson(res, 200, { memberships });
             }
 
@@ -253,7 +253,7 @@ export function createServer(customIdp?: any, customRuntimePool?: any) {
                 if (!orgId) {
                     return sendJson(res, 400, { error: 'MISSING_ORG_ID' });
                 }
-                const workspaces = await listOrgWorkspaces(principal.id, orgId);
+                const workspaces = await listOrgWorkspaces(principal.id, orgId, dbPool);
                 return sendJson(res, 200, { workspaces });
             }
 
