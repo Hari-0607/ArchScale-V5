@@ -1,10 +1,10 @@
 # Phase 2 Step 2 — RLS and authorisation design
 
-Status: **design only**. Do not implement until this document is approved.
+Status: **APPROVED WITH AMENDMENTS**. Design approved; implement via new migration 013 and TypeScript build. Applied migrations (001–012) are immutable.
 
-This step gives `archscale_app_runtime` a working membership list, context create / renew / revoke, and `decide()`, without opening tables to unvalidated GUCs. Every policy below must re-check `is_context_valid()` (or call `fn_current_context_user_id()`, which already does). Bare `current_setting('archscale.current_context_id')` is forbidden in policies.
+This step gives `archscale_app_runtime` a working membership list, context create / renew / revoke, and `decide()`, without opening tables to unvalidated GUCs. Every policy below must re-check `is_context_valid()` (or call `fn_current_context_user_id()`, which already does). Bare `current_setting('archscale.current_context_id')` is strictly forbidden in policies.
 
-Migration 010 already ENABLE + FORCE RLS on public tables in staging. Local tests enable RLS but do not FORCE it on the table owner. Runtime is `NOBYPASSRLS`, so missing policies already mean zero rows for that role.
+Migration 010 already ENABLE + FORCE RLS on public tables in staging. Local tests enable RLS but do not FORCE it on the table owner. Runtime is `NOBYPASSRLS`, so missing policies already mean zero rows for that role. All database changes ship as new migrations (`013_...` and later).
 
 ---
 
@@ -12,24 +12,70 @@ Migration 010 already ENABLE + FORCE RLS on public tables in staging. Local test
 
 1. Target organisation, workspace, role, profile, portal, and tenant type come from the **database row bound to the access context**, never from request JSON or headers. Injected `organisation_id`, `role_key`, or similar are ignored.
 2. The caller must name organisation and workspace explicitly. Never default to “first membership” or “default workspace”.
-3. Context lifetime is `least(now() + 24 hours, membership.expires_at)` and the table check `expires_at <= created_at + interval '24 hours'` remains the hard cap.
-4. Platform standing and tenant standing are separate paths. A platform role may enter a subscriber organisation only with an **ACTIVE** `support_access_grants` row (not revoked, `expires_at > now()`, staff membership is the actor’s platform membership, target organisation matches).
+3. Context lifetime is `least(now() + 24 hours, membership.expires_at[, grant.expires_at])` and the table check `expires_at <= created_at + interval '24 hours'` remains the hard cap.
+4. Platform standing and tenant standing are separate paths:
+   - A platform staff role may enter a subscriber organisation only via a **support context** bound to an **ACTIVE** `support_access_grants` row (not revoked, `expires_at > now()`, staff membership is the actor’s platform membership, target organisation matches).
+   - **Support contexts are strictly read-only**: tenant-table policies allow SELECT only, and every write/approval function must reject a context that has `support_grant_id`.
+   - Context expiry is capped at the grant's expiry.
 5. Clients see a short reason code. The long reason is written only to `audit_logs`.
 6. Audit every context create / renew / revoke and every `DENY` from `decide()`.
+7. Direct audit SELECT for the runtime role is revoked; audit reads require a permission-gated definer function (`org.audit.read`).
 
 ---
 
-## Prerequisite: `is_context_valid(uuid)` must become SECURITY DEFINER
+## Trust boundary
+
+Pre-context functions (`fn_list_principal_memberships`, `fn_create_access_context`, `fn_list_org_workspaces_for_principal`) take principal and session identifiers from the application layer. The application layer obtains these from cryptographic identity provider tokens (Supabase GoTrue JWT / local verified session) after server-side verification:
+
+```
+[Client HTTP Request]
+        │  (Bearer JWT)
+        ▼
+[Verified Application Layer]  ── verifies JWT signature, exp, session status
+        │  (passes verified principal.id, principal.sessionId)
+        ▼
+[Database Definer Functions]  ── enforces all relational and security invariants
+```
+
+Regardless of parameters supplied by the application layer, the database enforces the following invariants unconditionally:
+1. **User presence**: `p_user_id` must exist in `public.users`.
+2. **Membership status**: The user must have a membership record for the requested organisation with status strictly `ACTIVE` and `expires_at > now()`.
+3. **Organisation status**: The organisation must exist and have status strictly `ACTIVE`.
+4. **Workspace integrity**: The workspace must exist, be active (`is_active = true`), and belong to the requested organisation (`workspace.organisation_id = organisation.id`).
+5. **Entitlements**: Subscriber organisations must possess at least one enabled entitlement (`organisation_entitlements.is_enabled = true`). Platform organisations are exempt.
+6. **Support grant validity**: If entering a tenant via platform role, an `ACTIVE`, unexpired, unrevoked support grant is required matching staff membership and target organisation.
+7. **24-hour lifetime cap**: Expiry is computed as `least(now() + interval '24 hours', membership.expires_at[, grant.expires_at])`, bounded by `created_at + interval '24 hours'`.
+8. **Minimum column exposure**: Functions return only minimum necessary columns; internal credentials, unneeded tokens, and private secrets are never selected or returned.
+
+---
+
+## Prerequisite: `fn_set_app_context` and `is_context_valid`
 
 Today `is_context_valid(uuid)` is `LANGUAGE sql STABLE` **invoker**. Runtime `SELECT` on `access_contexts` / `memberships` / `organisations` / `workspaces` with no policy returns zero rows, so the function is always false for the runtime role (and `fn_set_app_context` would always raise).
 
-Step 2 migration must:
+Step 2 migration (`013_...`) must:
 
-- Recreate `is_context_valid(uuid)` as `SECURITY DEFINER` with `SET search_path = public, pg_temp`.
-- Keep the parameterless `is_context_valid()` from 012 (safe `NULLIF` GUC cast).
-- Keep `fn_set_app_context` as the only way to set `archscale.current_context_id` (`is_local = true`).
+1. **`fn_set_app_context(p_context_id uuid, p_user_id uuid, p_session_id text)`**:
+   - Replaced to take all three identity anchors: `(context_id, user_id, session_id)`.
+   - Validates all three against `access_contexts` inside the function:
+     - Context row exists where `id = p_context_id`, `user_id = p_user_id`, and `session_id = p_session_id`.
+     - Validates `is_context_valid(p_context_id)` is true.
+     - Raises exception `P0001` if any check fails.
+   - Sets transaction-local GUC: `PERFORM set_config('archscale.current_context_id', p_context_id::text, true)`.
+   - Context IDs are unguessable (UUID v4) and returned only to the authenticated principal owner on creation.
 
-Until that change, **no context-bound RLS policy can work for runtime**.
+2. **`is_context_valid(uuid)` as `SECURITY DEFINER`**:
+   - Recreated as `SECURITY DEFINER` with `SET search_path = public, pg_temp`.
+   - Re-checks:
+     - Context exists and `revoked_at IS NULL`
+     - Context `expires_at > now()`
+     - Organisation status = `ACTIVE`
+     - Membership status = `ACTIVE` and `(membership.expires_at IS NULL OR membership.expires_at > now())`
+     - Workspace `is_active = true`
+     - If `support_grant_id` IS NOT NULL: re-checks that `support_access_grants` row has `status = 'ACTIVE'`, `revoked_at IS NULL`, and `expires_at > now()`. If the grant was revoked or expired, `is_context_valid` immediately returns `false`.
+   - Parameterless `is_context_valid()` (from 012) calls `is_context_valid(NULLIF(current_setting('archscale.current_context_id', true), '')::uuid)`.
+
+Until this change, **no context-bound RLS policy can work for runtime**.
 
 ---
 
