@@ -650,4 +650,265 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         expect(allowedCount).toBe(4);
         expect(deniedCount).toBe(6);
     });
+
+    it('11. F2: Rate limit primary key creation fails on duplicate (key, action) pair without deduplication', async () => {
+        // Create a temporary table mimicking auth_rate_limits with duplicate (key, action)
+        await adminPool.query(`
+            CREATE TEMPORARY TABLE test_rate_limits_dup (
+                key TEXT,
+                action TEXT
+            );
+            INSERT INTO test_rate_limits_dup (key, action) VALUES
+                ('dup_key', 'signin'),
+                ('dup_key', 'signin');
+        `);
+
+        // Adding primary key without deduplication must fail with unique violation (23505)
+        await expect(adminPool.query(`
+            ALTER TABLE test_rate_limits_dup ADD PRIMARY KEY (key, action);
+        `)).rejects.toThrow(/could not create unique index|unique constraint|23505/i);
+    });
+
+    it('12. F3: fn_set_organisation_mfa_requirement gated by org.settings.manage permission and aal2', async () => {
+        // Leader (who does not hold org.settings.manage) is denied with AUTH_PERMISSION_DENIED
+        const leaderCtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_lead_mfa_test', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_LEADER_ID, ORG_A_ID, workspaceAId]);
+        const leaderCtxId = leaderCtxRes.rows[0].fn_create_access_context;
+
+        const leaderClient = await runtimePool.connect();
+        try {
+            await leaderClient.query('BEGIN;');
+            await leaderClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [leaderCtxId, USER_LEADER_ID, 'sess_lead_mfa_test']);
+            await expect(leaderClient.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`))
+                .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+            await leaderClient.query('ROLLBACK;');
+        } finally {
+            leaderClient.release();
+        }
+
+        // Business owner at aal1 is denied with AUTH_AAL
+        const ownerAal1Res = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_owner_mfa_aal1', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
+        const ownerAal1CtxId = ownerAal1Res.rows[0].fn_create_access_context;
+
+        const ownerAal1Client = await runtimePool.connect();
+        try {
+            await ownerAal1Client.query('BEGIN;');
+            await ownerAal1Client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerAal1CtxId, USER_OWNER_ID, 'sess_owner_mfa_aal1']);
+            await expect(ownerAal1Client.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`))
+                .rejects.toThrow(/AUTH_AAL/i);
+            await ownerAal1Client.query('ROLLBACK;');
+        } finally {
+            ownerAal1Client.release();
+        }
+
+        // Business owner at aal2 is ALLOWED
+        const ownerAal2Res = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_owner_mfa_aal2', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
+        const ownerAal2CtxId = ownerAal2Res.rows[0].fn_create_access_context;
+
+        const ownerAal2Client = await runtimePool.connect();
+        try {
+            await ownerAal2Client.query('BEGIN;');
+            await ownerAal2Client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerAal2CtxId, USER_OWNER_ID, 'sess_owner_mfa_aal2']);
+            const res = await ownerAal2Client.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`);
+            expect(res.rowCount).toBe(1);
+            await ownerAal2Client.query('COMMIT;');
+        } finally {
+            ownerAal2Client.release();
+        }
+    });
+
+    it('13. F4: Support context without platform.support.read is denied in fn_list_org_members and fn_list_org_invitations', async () => {
+        // Create an untrusted staff user without platform.support.read permission
+        const UNTRUSTED_STAFF_ID = '30000000-0000-0000-0000-000000000099';
+        await adminPool.query(`
+            INSERT INTO auth.users (id, email) VALUES ($1, 'untrusted@platform.test') ON CONFLICT DO NOTHING;
+            INSERT INTO public.users (id, user_code, email) VALUES ($1, 'AS-UNTRUST', 'untrusted@platform.test') ON CONFLICT DO NOTHING;
+            INSERT INTO public.memberships (organisation_id, user_id, role_key, status)
+            VALUES ('00000000-0000-0000-0000-000000000001', $1, 'developer', 'ACTIVE') ON CONFLICT DO NOTHING;
+        `, [UNTRUSTED_STAFF_ID]);
+
+        // Create support grant with untrusted staff membership
+        const devMemRes = await adminPool.query(`SELECT id FROM public.memberships WHERE user_id = $1;`, [UNTRUSTED_STAFF_ID]);
+        const devMemId = devMemRes.rows[0].id;
+
+        const grantRes = await adminPool.query(`
+            INSERT INTO public.support_access_grants (staff_membership_id, target_organisation_id, reason, expires_at)
+            VALUES ($1, $2, 'Investigating bug', now() + interval '2 hours') RETURNING id;
+        `, [devMemId, ORG_A_ID]);
+        const badGrantId = grantRes.rows[0].id;
+
+        const badSupCtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_bad_staff', $2::uuid, $3::uuid, 'aal2', $4::uuid);
+        `, [UNTRUSTED_STAFF_ID, ORG_A_ID, workspaceAId, badGrantId]);
+        const badSupCtxId = badSupCtxRes.rows[0].fn_create_access_context;
+
+        const badClient = await runtimePool.connect();
+        try {
+            await badClient.query('BEGIN;');
+            await badClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [badSupCtxId, UNTRUSTED_STAFF_ID, 'sess_bad_staff']);
+
+            // Expect rejection because developer role lacks platform.support.read
+            await expect(badClient.query(`SELECT * FROM fn_list_org_members();`))
+                .rejects.toThrow(/AUTH_PERMISSION_DENIED: Support context requires platform.support.read/i);
+
+            await expect(badClient.query(`SELECT * FROM fn_list_org_invitations();`))
+                .rejects.toThrow(/AUTH_PERMISSION_DENIED: Support context requires platform.support.read/i);
+
+            await badClient.query('ROLLBACK;');
+        } finally {
+            badClient.release();
+        }
+    });
+
+    it('14. F5: fn_get_effective_permissions(membership_id) enforces org.members.read and active status', async () => {
+        // Intern inspecting own permissions succeeds
+        const internCtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_int_eff', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
+        const internCtxId = internCtxRes.rows[0].fn_create_access_context;
+
+        const internClient = await runtimePool.connect();
+        try {
+            await internClient.query('BEGIN;');
+            await internClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [internCtxId, USER_INTERN_ID, 'sess_int_eff']);
+
+            // Own permissions
+            const ownPermsRes = await internClient.query<{ fn_get_effective_permissions: string[] }>(
+                `SELECT fn_get_effective_permissions();`
+            );
+            expect(ownPermsRes.rows[0].fn_get_effective_permissions).toBeInstanceOf(Array);
+
+            // Intern inspecting leader's permissions without org.members.read returns empty array {}
+            const otherPermsRes = await internClient.query<{ fn_get_effective_permissions: string[] }>(
+                `SELECT fn_get_effective_permissions($1::uuid);`, [leaderMembershipId]
+            );
+            expect(otherPermsRes.rows[0].fn_get_effective_permissions).toEqual([]);
+
+            await internClient.query('COMMIT;');
+        } finally {
+            internClient.release();
+        }
+
+        // Leader (with org.members.read) inspecting an expired or suspended membership gets empty array {}
+        const leaderCtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_lead_eff', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_LEADER_ID, ORG_A_ID, workspaceAId]);
+        const leaderCtxId = leaderCtxRes.rows[0].fn_create_access_context;
+
+        // Temporarily suspend intern membership
+        await adminPool.query(`UPDATE public.memberships SET status = 'SUSPENDED' WHERE id = $1;`, [internMembershipId]);
+
+        const leaderClient = await runtimePool.connect();
+        try {
+            await leaderClient.query('BEGIN;');
+            await leaderClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [leaderCtxId, USER_LEADER_ID, 'sess_lead_eff']);
+
+            const suspendedPermsRes = await leaderClient.query<{ fn_get_effective_permissions: string[] }>(
+                `SELECT fn_get_effective_permissions($1::uuid);`, [internMembershipId]
+            );
+            expect(suspendedPermsRes.rows[0].fn_get_effective_permissions).toEqual([]);
+
+            await leaderClient.query('COMMIT;');
+        } finally {
+            leaderClient.release();
+            // Restore intern membership status
+            await adminPool.query(`UPDATE public.memberships SET status = 'ACTIVE' WHERE id = $1;`, [internMembershipId]);
+        }
+    });
+
+    it('15. A3: Invitations Engine Security Definer functions lifecycle', async () => {
+        const ownerCtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_owner_inv_test', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
+        const ownerCtxId = ownerCtxRes.rows[0].fn_create_access_context;
+
+        const client = await runtimePool.connect();
+        let invId: string;
+        const testRawToken = 'secret-test-token-123456789012345678901234';
+
+        try {
+            await client.query('BEGIN;');
+            await client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerCtxId, USER_OWNER_ID, 'sess_owner_inv_test']);
+
+            // 1. Create invitation for intern (with expiry and manager)
+            const crypto = await import('crypto');
+            const tokenHash = crypto.createHash('sha256').update(testRawToken).digest('hex');
+
+            const createRes = await client.query<{ fn_create_invitation: string }>(`
+                SELECT fn_create_invitation(
+                    'invitee.one@studio.test',
+                    'intern',
+                    NULL,
+                    'Engineering',
+                    'Junior Intern',
+                    $1::uuid,
+                    now() + interval '30 days',
+                    $2
+                );
+            `, [mgrMembershipId, tokenHash]);
+            invId = createRes.rows[0].fn_create_invitation;
+            expect(invId).toBeDefined();
+
+            // 2. Mark invitation sent
+            const sentRes = await client.query<{ fn_mark_invitation_sent: boolean }>(`
+                SELECT fn_mark_invitation_sent($1::uuid);
+            `, [invId]);
+            expect(sentRes.rows[0].fn_mark_invitation_sent).toBe(true);
+
+            // 3. Resend invitation with rate limit check
+            const newHash = crypto.createHash('sha256').update('new-token-999').digest('hex');
+            const resendRes = await client.query<{ fn_resend_invitation: boolean }>(`
+                SELECT fn_resend_invitation($1::uuid, $2);
+            `, [invId, newHash]);
+            expect(resendRes.rows[0].fn_resend_invitation).toBe(true);
+
+            // Re-hash back to testRawToken for acceptance test
+            await adminPool.query(`UPDATE public.invitations SET token_hash = $1, status = 'Sent' WHERE id = $2;`, [tokenHash, invId]);
+
+            await client.query('COMMIT;');
+        } finally {
+            client.release();
+        }
+
+        // 4. Accept invitation by invitee user
+        const INVITEE_USER_ID = '30000000-0000-0000-0000-000000000077';
+        await adminPool.query(`
+            INSERT INTO auth.users (id, email) VALUES ($1, 'invitee.one@studio.test') ON CONFLICT DO NOTHING;
+            INSERT INTO public.users (id, user_code, email) VALUES ($1, 'AS-INV01', 'invitee.one@studio.test') ON CONFLICT DO NOTHING;
+        `, [INVITEE_USER_ID]);
+
+        // Wrong token rejected
+        await expect(adminPool.query(`SELECT fn_accept_invitation('wrong-token', $1::uuid);`, [INVITEE_USER_ID]))
+            .rejects.toThrow(/AUTH_INVITATION_NOT_FOUND/i);
+
+        // Wrong email rejected
+        await expect(adminPool.query(`SELECT fn_accept_invitation($1, $2::uuid);`, [testRawToken, USER_EXEC_ID]))
+            .rejects.toThrow(/AUTH_INVITATION_EMAIL_MISMATCH/i);
+
+        // Correct acceptance creates membership with copied department, job_role, and reporting manager
+        const acceptRes = await adminPool.query<{ fn_accept_invitation: string }>(`
+            SELECT fn_accept_invitation($1, $2::uuid);
+        `, [testRawToken, INVITEE_USER_ID]);
+        const newMemId = acceptRes.rows[0].fn_accept_invitation;
+        expect(newMemId).toBeDefined();
+
+        const memCheck = await adminPool.query(`
+            SELECT role_key, department, job_role, reporting_manager_membership_id, status
+            FROM public.memberships WHERE id = $1;
+        `, [newMemId]);
+        expect(memCheck.rows[0].role_key).toBe('intern');
+        expect(memCheck.rows[0].department).toBe('Engineering');
+        expect(memCheck.rows[0].job_role).toBe('Junior Intern');
+        expect(memCheck.rows[0].reporting_manager_membership_id).toBe(mgrMembershipId);
+        expect(memCheck.rows[0].status).toBe('ACTIVE');
+
+        // Accepting a second time fails because status is Accepted
+        await expect(adminPool.query(`SELECT fn_accept_invitation($1, $2::uuid);`, [testRawToken, INVITEE_USER_ID]))
+            .rejects.toThrow(/AUTH_INVITATION_INVALID_STATUS/i);
+    });
 });
