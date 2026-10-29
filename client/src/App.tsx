@@ -16,63 +16,53 @@ import { AttendancePage } from './pages/frontstage/AttendancePage';
 import { InvitationsPage } from './pages/frontstage/InvitationsPage';
 import { TenantsPage } from './pages/backstage/TenantsPage';
 
-// Roles considered backstage (platform super admin)
+// Roles with platform-level (backstage) access
 const BACKSTAGE_ROLES = new Set(['founder', 'platform_admin']);
 
-// Roles/depts that can see Attendance
+// Attendance is visible only to HR dept or founder
 function canSeeAttendance(role?: string, dept?: string): boolean {
-  if (!role) return false;
   if (role === 'founder') return true;
   if (dept === 'HR') return true;
   return false;
 }
 
+const BACKSTAGE_NAV: NavItem[] = [
+  { key: 'tenants',  label: 'Tenants',   icon: '🏢' },
+  { key: 'audit',    label: 'Audit Log', icon: '🔍' },
+  { key: 'support',  label: 'Support',   icon: '🛡' },
+];
+
 export const App: React.FC = () => {
-  const { toasts, addToast, removeToast } = useToast();
+  const { toasts, removeToast } = useToast();
   const [session, setSession] = useState<SessionData | null>(null);
   const [context, setContext] = useState<ContextData | null>(null);
   const [activeNav, setActiveNav] = useState('team');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [pickingContext, setPickingContext] = useState(false);
 
-  // Derive persona role/dept — from context (DB), then from demoPersona, then from principal
-  const personaRole = context?.roleKey ?? session?.demoPersona?.role ?? session?.principal.role;
-  const personaDept = context ? undefined : (session?.demoPersona?.dept ?? (session?.principal as any)?.department);
+  // Derive role + dept from context (DB authoritative) → demoPersona → principal
+  const personaRole = context?.roleKey
+    ?? session?.demoPersona?.role
+    ?? session?.principal.role;
+  const personaDept = context?.roleKey
+    ? undefined   // trust DB when context has role
+    : (session?.demoPersona?.dept ?? (session?.principal as any)?.department);
 
   const isBackstage = !!(session && BACKSTAGE_ROLES.has(personaRole ?? ''));
   const showAttendance = canSeeAttendance(personaRole, personaDept);
 
-  const getFrontstageNav = (): NavItem[] => [
+  const navItems: NavItem[] = isBackstage ? BACKSTAGE_NAV : [
     { key: 'team',        label: 'Team',         icon: '👥' },
     { key: 'tasks',       label: 'Tasks',        icon: '✓' },
     { key: 'attendance',  label: 'Attendance',   icon: '📅', hidden: !showAttendance },
     { key: 'invitations', label: 'Invitations',  icon: '✉' },
   ];
 
-  const BACKSTAGE_NAV: NavItem[] = [
-    { key: 'tenants',  label: 'Tenants',      icon: '🏢' },
-    { key: 'audit',    label: 'Audit Log',    icon: '🔍' },
-    { key: 'support',  label: 'Support',      icon: '🛡' },
-  ];
-
-export const App: React.FC = () => {
-  const { toasts, addToast, removeToast } = useToast();
-  const [session, setSession] = useState<SessionData | null>(null);
-  const [context, setContext] = useState<ContextData | null>(null);
-  const [activeNav, setActiveNav] = useState('team');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [pickingContext, setPickingContext] = useState(false);
-
-  const isBackstage = !!(
-    session &&
-    (BACKSTAGE_ROLES.has(session.principal.role ?? '') ||
-      session.principal.email?.includes('founder'))
-  );
-
   const handleLoginSuccess = (sess: SessionData) => {
     setSession(sess);
     setToken(sess.accessToken);
-    const isBS = BACKSTAGE_ROLES.has(sess.principal.role ?? '') || sess.principal.email?.includes('founder');
+    const isBS = BACKSTAGE_ROLES.has(sess.principal.role ?? '')
+      || sess.principal.email?.includes('founder');
     if (isBS) {
       setActiveNav('tenants');
     } else {
@@ -89,7 +79,7 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = async () => {
-    try { await logout(context?.contextId); } catch { /* ignore */ }
+    try { await logout(context?.contextId); } catch { /* ignore network */ }
     setSession(null);
     setContext(null);
     setPickingContext(false);
@@ -98,16 +88,12 @@ export const App: React.FC = () => {
     setContextId(null);
   };
 
-  const handleSwitchContext = () => {
-    setPickingContext(true);
-  };
-
   const renderPage = () => {
     if (isBackstage) {
       switch (activeNav) {
         case 'tenants': return <TenantsPage />;
-        case 'audit':   return <BackstageAuditPlaceholder />;
-        case 'support': return <BackstageSupportPlaceholder />;
+        case 'audit':   return <PlaceholderPage icon="🔍" title="Audit Log" />;
+        case 'support': return <PlaceholderPage icon="🛡" title="Support Access" />;
         default:        return <TenantsPage />;
       }
     }
@@ -130,32 +116,17 @@ export const App: React.FC = () => {
     );
   }
 
-  // ── Picking context (org/workspace) ───────────────────────────────────────
+  // ── Org/workspace picker ───────────────────────────────────────────────────
   if (pickingContext && !isBackstage) {
     return (
       <SessionContext.Provider value={{ session, context, setSession, setContext }}>
         <ToastList toasts={toasts} onRemove={removeToast} />
-        <OrgWorkspacePicker
-          onContextCreated={handleContextCreated}
-          onLogout={handleLogout}
-        />
+        <OrgWorkspacePicker onContextCreated={handleContextCreated} onLogout={handleLogout} />
       </SessionContext.Provider>
     );
   }
 
-  // ── Main app shell ─────────────────────────────────────────────────────────
-  // Derive persona role+dept from context (DB lookup) → demoPersona → principal
-  const personaRole = context?.roleKey ?? session.demoPersona?.role ?? session.principal.role;
-  const personaDept = context?.roleKey ? undefined : (session.demoPersona?.dept ?? (session.principal as any).department);
-  const showAttendance = personaRole === 'founder' || personaDept === 'HR' || personaRole === 'founder';
-
-  const navItems = isBackstage ? BACKSTAGE_NAV : [
-    { key: 'team',        label: 'Team',         icon: '👥' },
-    { key: 'tasks',       label: 'Tasks',        icon: '✓' },
-    { key: 'attendance',  label: 'Attendance',   icon: '📅', hidden: !showAttendance },
-    { key: 'invitations', label: 'Invitations',  icon: '✉' },
-  ];
-
+  // ── Main shell ─────────────────────────────────────────────────────────────
   return (
     <SessionContext.Provider value={{ session, context, setSession, setContext }}>
       <ToastList toasts={toasts} onRemove={removeToast} />
@@ -163,9 +134,13 @@ export const App: React.FC = () => {
         <Sidebar
           items={navItems}
           active={activeNav}
-          onChange={setActiveNav}
+          onChange={key => {
+            // If attendance is hidden but someone navigates to it (direct), redirect to team
+            if (key === 'attendance' && !showAttendance) return;
+            setActiveNav(key);
+          }}
           title={isBackstage ? 'ArchScale Platform' : (context?.organisationName ?? 'ArchScale')}
-          subtitle={isBackstage ? 'Backstage' : (context?.workspaceName ?? (session.demoPersona?.dept ?? undefined))}
+          subtitle={isBackstage ? 'Backstage' : (context?.workspaceName ?? personaDept)}
           collapsed={sidebarCollapsed}
           onCollapse={() => setSidebarCollapsed(c => !c)}
         />
@@ -174,7 +149,7 @@ export const App: React.FC = () => {
             session={session}
             context={context}
             onLogout={handleLogout}
-            onSwitchContext={handleSwitchContext}
+            onSwitchContext={() => setPickingContext(true)}
           />
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {renderPage()}
@@ -185,23 +160,12 @@ export const App: React.FC = () => {
   );
 };
 
-// ── Simple placeholder pages for unimplemented backstage sections ──────────
-const BackstageAuditPlaceholder: React.FC = () => (
+const PlaceholderPage: React.FC<{ icon: string; title: string }> = ({ icon, title }) => (
   <div className="page-body">
-    <div style={{ padding: '48px 0', textAlign: 'center', color: 'var(--color-text-muted)' }}>
-      <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>🔍</div>
-      <div style={{ fontWeight: 600, color: 'var(--color-text)', marginBottom: 6 }}>Audit Log</div>
-      <div style={{ fontSize: 'var(--font-size-sm)' }}>Platform audit log viewer — coming soon</div>
-    </div>
-  </div>
-);
-
-const BackstageSupportPlaceholder: React.FC = () => (
-  <div className="page-body">
-    <div style={{ padding: '48px 0', textAlign: 'center', color: 'var(--color-text-muted)' }}>
-      <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>🛡</div>
-      <div style={{ fontWeight: 600, color: 'var(--color-text)', marginBottom: 6 }}>Support Access</div>
-      <div style={{ fontSize: 'var(--font-size-sm)' }}>Support grant management — coming soon</div>
+    <div style={{ padding: '56px 0', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+      <div style={{ fontSize: 36, marginBottom: 14, opacity: 0.3 }}>{icon}</div>
+      <div style={{ fontWeight: 600, fontSize: 'var(--font-size-md)', color: 'var(--color-text)', marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 'var(--font-size-sm)' }}>Coming soon</div>
     </div>
   </div>
 );
