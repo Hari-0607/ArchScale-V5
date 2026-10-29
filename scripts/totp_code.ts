@@ -37,9 +37,12 @@ function main() {
         process.exit(1);
     }
 
-    // Prints ONLY the current 6-digit TOTP code (never secrets or tokens)
-    const code = generateTotpCode(user.totpSecret);
+    // Prints ONLY the current 6-digit TOTP code (never secrets or tokens) and window validity
+    const now = Math.floor(Date.now() / 1000);
+    const remaining = 30 - (now % 30);
+    const code = generateTotpCode(user.totpSecret, now);
     console.log(code);
+    console.log(`(${remaining}s remaining before expiry)`);
 }
 
 main();
