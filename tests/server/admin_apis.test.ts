@@ -394,4 +394,79 @@ describe('A6 Verification Tests: Boundaries & Invariants', () => {
             expect(['public', 'session', `permission:${key}`].some(k => def.kind.startsWith('permission:') || def.kind === 'public' || def.kind === 'session')).toBe(true);
         }
     });
+
+    it('15. POST /api/platform/organisations/:id/approve approves pending subscriber organisation (B0.6)', async () => {
+        // Create new applied org
+        const createRes = await fetch(`${baseUrl}/api/platform/organisations`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${founderToken}`,
+                'X-ArchScale-Context': founderContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ name: 'Approve Test Studio', tenantTypeKey: 'studio_owner' })
+        });
+        const { organisationId } = await createRes.json();
+
+        // Approve it
+        const approveRes = await fetch(`${baseUrl}/api/platform/organisations/${organisationId}/approve`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${founderToken}`,
+                'X-ArchScale-Context': founderContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ reason: 'Official approval' })
+        });
+        expect(approveRes.status).toBe(200);
+
+        const check = await adminPool.query(`SELECT status FROM public.organisations WHERE id = $1;`, [organisationId]);
+        expect(check.rows[0].status).toBe('ACTIVE');
+    });
+
+    it('16. POST /api/platform/organisations/:id/invite-admin invites initial business owner (B0.6)', async () => {
+        // Create org
+        const createRes = await fetch(`${baseUrl}/api/platform/organisations`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${founderToken}`,
+                'X-ArchScale-Context': founderContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ name: 'Invite Admin Studio', tenantTypeKey: 'studio_owner' })
+        });
+        const { organisationId } = await createRes.json();
+
+        const inviteRes = await fetch(`${baseUrl}/api/platform/organisations/${organisationId}/invite-admin`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${founderToken}`,
+                'X-ArchScale-Context': founderContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ email: 'new.owner@studio.local' })
+        });
+        expect(inviteRes.status).toBe(200);
+        const { invitationId } = await inviteRes.json();
+        expect(invitationId).toBeDefined();
+
+        const check = await adminPool.query(`SELECT target_role_key, status FROM public.invitations WHERE id = $1;`, [invitationId]);
+        expect(check.rows[0].target_role_key).toBe('business_owner');
+        expect(check.rows[0].status).toBe('Sent');
+    });
+
+    it('17. GET /api/org/support-grants allows tenant admin to view support grants (B0.6)', async () => {
+        const res = await fetch(`${baseUrl}/api/org/support-grants`, {
+            headers: {
+                'Authorization': `Bearer ${ownerToken}`,
+                'X-ArchScale-Context': ownerContextId
+            }
+        });
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.data).toBeInstanceOf(Array);
+        expect(data.data.length).toBeGreaterThanOrEqual(1);
+        expect(data.data[0]).toHaveProperty('reason');
+        expect(data.data[0]).toHaveProperty('expires_at');
+    });
 });

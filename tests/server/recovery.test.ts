@@ -108,5 +108,78 @@ describe('A4 Account Flows & Password Recovery', () => {
         }
         expect(rateLimited).toBe(true);
     });
+
+    it('3. password reset revokes every session and context of that user (B0.6 item 6)', async () => {
+        // Set up organisation, workspace and membership for KNOWN_EMAIL / USER_TEST_ID
+        const ORG_ID = '70000000-0000-0000-0000-000000000010';
+        await adminPool.query(`
+            INSERT INTO public.organisations (id, name, portal, tenant_type_key, status)
+            VALUES ($1, 'Recovery Test Org', 'subscriber', 'studio_owner', 'ACTIVE')
+            ON CONFLICT DO NOTHING;
+        `, [ORG_ID]);
+
+        const wsRes = await adminPool.query(`
+            INSERT INTO public.workspaces (organisation_id, name, is_active)
+            VALUES ($1, 'Recovery WS', true) RETURNING id;
+        `, [ORG_ID]);
+        const wsId = wsRes.rows[0].id;
+
+        await adminPool.query(`
+            INSERT INTO public.memberships (user_id, organisation_id, role_key, status)
+            VALUES ($1, $2, 'leader', 'ACTIVE')
+            ON CONFLICT DO NOTHING;
+        `, [USER_TEST_ID, ORG_ID]);
+
+        // Sign in with initial password
+        const initialLogin = await localIdp.signIn({ email: KNOWN_EMAIL, password: 'initial-password' });
+        const oldToken = initialLogin.accessToken;
+
+        const ctxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, $2, $3::uuid, $4::uuid, 'aal1');
+        `, [USER_TEST_ID, initialLogin.principal.sessionId, ORG_ID, wsId]);
+        const oldContextId = ctxRes.rows[0].fn_create_access_context;
+
+        // Verify valid access
+        const preCheck = await fetch(`${baseUrl}/api/me`, {
+            headers: {
+                'Authorization': `Bearer ${oldToken}`,
+                'X-ArchScale-Context': oldContextId
+            }
+        });
+        expect(preCheck.status).toBe(200);
+
+        // Perform password reset
+        const resetRes = await fetch(`${baseUrl}/api/session/reset-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email: KNOWN_EMAIL,
+                newPassword: 'brand-new-password-2026'
+            })
+        });
+        expect(resetRes.status).toBe(200);
+
+        // Old token is rejected (session revoked)
+        const oldTokenCheck = await fetch(`${baseUrl}/api/me`, {
+            headers: {
+                'Authorization': `Bearer ${oldToken}`,
+                'X-ArchScale-Context': oldContextId
+            }
+        });
+        expect(oldTokenCheck.status).toBe(401);
+
+        // Context is revoked in DB
+        const dbCtxCheck = await adminPool.query(`
+            SELECT revoked_at FROM public.access_contexts WHERE id = $1::uuid;
+        `, [oldContextId]);
+        expect(dbCtxCheck.rows[0].revoked_at).not.toBeNull();
+
+        // Old password no longer works
+        await expect(localIdp.signIn({ email: KNOWN_EMAIL, password: 'initial-password' })).rejects.toThrow();
+
+        // New password works
+        const newLogin = await localIdp.signIn({ email: KNOWN_EMAIL, password: 'brand-new-password-2026' });
+        expect(newLogin.accessToken).toBeDefined();
+    });
 });
 
