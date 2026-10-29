@@ -38,7 +38,7 @@ export const DB_CONFIG: pg.PoolConfig = {
 
 import * as crypto from 'crypto';
 
-const localRuntimePassword = process.env.ARCHSCALE_LOCAL_RUNTIME_PASSWORD || crypto.randomBytes(16).toString('hex');
+const localRuntimePassword = process.env.ARCHSCALE_LOCAL_RUNTIME_PASSWORD || 'local_test_pass';
 process.env.ARCHSCALE_LOCAL_RUNTIME_PASSWORD = localRuntimePassword;
 
 export const RUNTIME_CONFIG: pg.PoolConfig = {
