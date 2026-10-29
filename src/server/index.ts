@@ -330,6 +330,109 @@ export function createServer(
         return res.status(200).json({ success: true });
     });
 
+    // 8. POST /api/invitations/accept (Session kind: authenticated principal, no context required)
+    app.post('/api/invitations/accept', authenticate, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const body = req.body || {};
+        const token = body.token;
+        if (!token || typeof token !== 'string') {
+            return res.status(400).json({ error: 'TOKEN_REQUIRED', message: 'Invitation token is required' });
+        }
+
+        try {
+            const client = await dbPool.connect();
+            try {
+                const acceptRes = await client.query<{ fn_accept_invitation: string }>(
+                    `SELECT fn_accept_invitation($1, $2::uuid);`,
+                    [token.trim(), principal.id]
+                );
+                return res.status(200).json({
+                    success: true,
+                    membershipId: acceptRes.rows[0]?.fn_accept_invitation
+                });
+            } finally {
+                client.release();
+            }
+        } catch (err: any) {
+            const msg = err.message || '';
+            if (msg.includes('AUTH_INVITATION_NOT_FOUND')) {
+                return res.status(404).json({ error: 'AUTH_INVITATION_NOT_FOUND', message: 'Invalid invitation token' });
+            }
+            if (msg.includes('AUTH_INVITATION_EMAIL_MISMATCH')) {
+                return res.status(403).json({ error: 'AUTH_INVITATION_EMAIL_MISMATCH', message: 'Email mismatch' });
+            }
+            if (msg.includes('AUTH_INVITATION_REVOKED') || msg.includes('AUTH_INVITATION_EXPIRED') || msg.includes('AUTH_INVITATION_INVALID_STATUS')) {
+                return res.status(400).json({ error: 'AUTH_INVITATION_INVALID', message: msg });
+            }
+            return res.status(400).json({ error: 'AUTH_INVITATION_FAILED', message: msg });
+        }
+    });
+
+    // 9. Session Management (A5)
+    app.get('/api/me/sessions', authenticate, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        try {
+            const client = await dbPool.connect();
+            try {
+                const sessionsRes = await client.query(`
+                    SELECT id AS context_id, session_id, organisation_id, workspace_id, aal_level, created_at, expires_at, is_valid
+                    FROM public.access_contexts
+                    WHERE user_id = $1::uuid AND is_valid = true
+                    ORDER BY created_at DESC;
+                `, [principal.id]);
+                return res.status(200).json({ sessions: sessionsRes.rows });
+            } finally {
+                client.release();
+            }
+        } catch (err: any) {
+            return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', message: err.message });
+        }
+    });
+
+    app.delete('/api/me/sessions/:id', authenticate, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const sessionId = req.params.id;
+        try {
+            const client = await dbPool.connect();
+            try {
+                await client.query(`
+                    UPDATE public.access_contexts
+                    SET is_valid = false
+                    WHERE user_id = $1::uuid AND (id = $2::uuid OR session_id = $2);
+                `, [principal.id, sessionId]);
+                return res.status(200).json({ success: true });
+            } finally {
+                client.release();
+            }
+        } catch (err: any) {
+            return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', message: err.message });
+        }
+    });
+
+    app.delete('/api/me/sessions', authenticate, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const idp: IdentityProvider = (req as any).idp;
+        try {
+            const client = await dbPool.connect();
+            try {
+                await client.query(`
+                    UPDATE public.access_contexts
+                    SET is_valid = false
+                    WHERE user_id = $1::uuid;
+                `, [principal.id]);
+
+                if (principal.sessionId) {
+                    await idp.revokeSession(principal.sessionId).catch(() => {});
+                }
+                return res.status(200).json({ success: true });
+            } finally {
+                client.release();
+            }
+        } catch (err: any) {
+            return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', message: err.message });
+        }
+    });
+
     // --- CONTEXT-GUARDED ROUTES ---
     const requireContext = async (req: Request, res: Response, next: NextFunction) => {
         const contextId = req.headers['x-archscale-context'] as string;
@@ -422,7 +525,7 @@ export function createServer(
         });
     });
 
-    // GET /api/platform/organisations
+    // --- BACKSTAGE (PLATFORM) ROUTES ---
     app.get('/api/platform/organisations', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
@@ -432,11 +535,117 @@ export function createServer(
         if (!decision.allow) {
             return res.status(403).json({ error: decision.reasonCode, decision });
         }
-        const orgs = await client.query(`SELECT id, name, portal, status FROM public.organisations ORDER BY name;`);
+        const orgs = await client.query(`SELECT id, name, portal, tenant_type_key, status, member_min_aal FROM public.organisations ORDER BY name;`);
         return res.status(200).json({ decision, data: orgs.rows });
     });
 
-    // GET /api/org/members
+    app.get('/api/platform/organisations/:id', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+
+        const decision = await decide(client, principal, contextId, 'platform.organisations.read');
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        const org = await client.query(`SELECT id, name, portal, tenant_type_key, status, member_min_aal FROM public.organisations WHERE id = $1::uuid;`, [req.params.id]);
+        if (org.rows.length === 0) {
+            return res.status(404).json({ error: 'ORGANISATION_NOT_FOUND' });
+        }
+        return res.status(200).json({ decision, data: org.rows[0] });
+    });
+
+    app.post('/api/platform/organisations', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'platform.organisations.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            const orgRes = await client.query<{ fn_platform_create_organisation: string }>(
+                `SELECT fn_platform_create_organisation($1, $2);`,
+                [body.name, body.tenantTypeKey]
+            );
+            return res.status(200).json({ success: true, organisationId: orgRes.rows[0]?.fn_platform_create_organisation });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/platform/organisations/:id/suspend', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'platform.organisations.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            await client.query(`SELECT fn_platform_suspend_organisation($1::uuid, $2);`, [req.params.id, body.reason || 'Suspended by platform']);
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/platform/support/grants', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'platform.support.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            const grantRes = await client.query<{ fn_create_support_grant: string }>(
+                `SELECT fn_create_support_grant($1::uuid, $2, $3::int);`,
+                [body.targetOrganisationId, body.reason, body.hours || 4]
+            );
+            return res.status(200).json({ success: true, grantId: grantRes.rows[0]?.fn_create_support_grant });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/platform/support/grants/:id/revoke', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+
+        const decision = await decide(client, principal, contextId, 'platform.support.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            await client.query(`SELECT fn_revoke_support_grant($1::uuid);`, [req.params.id]);
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/platform/audit', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+
+        const decision = await decide(client, principal, contextId, 'platform.audit.read');
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        const audit = await client.query(`SELECT * FROM public.audit_logs ORDER BY created_at DESC LIMIT 50;`);
+        return res.status(200).json({ decision, auditLogs: audit.rows });
+    });
+
+    // --- FRONTSTAGE (TENANT) ROUTES ---
     app.get('/api/org/members', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
@@ -446,16 +655,117 @@ export function createServer(
         if (!decision.allow) {
             return res.status(403).json({ error: decision.reasonCode, decision });
         }
-        const members = await client.query(
-            `SELECT m.id, m.user_id, m.role_key, m.status 
-             FROM public.memberships m 
-             WHERE m.organisation_id = $1::uuid;`,
-            [decision.organisationId]
-        );
+        const members = await client.query(`SELECT * FROM fn_list_org_members();`);
         return res.status(200).json({ decision, data: members.rows });
     });
 
-    // POST /api/org/invitations (Return 202 Accepted per assignment / instructions)
+    app.patch('/api/org/members/:id/role', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'org.members.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            await client.query(`SELECT fn_update_member_role($1::uuid, $2);`, [req.params.id, body.roleKey]);
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/org/members/:id/suspend', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'org.members.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            await client.query(`SELECT fn_suspend_member($1::uuid, $2);`, [req.params.id, body.reason || 'Suspended by admin']);
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/org/members/:id/reactivate', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'org.members.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            await client.query(`SELECT fn_reactivate_member($1::uuid, $2);`, [req.params.id, body.reason || 'Reactivated']);
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.patch('/api/org/members/:id/profile', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'org.members.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            await client.query(`SELECT fn_update_member_profile($1::uuid, $2::uuid);`, [req.params.id, body.profileId || null]);
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/org/settings/mfa', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'org.settings.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            const mfaRes = await client.query<{ fn_set_organisation_mfa_requirement: any }>(
+                `SELECT fn_set_organisation_mfa_requirement($1);`,
+                [body.memberMinAal]
+            );
+            return res.status(200).json({ success: true, result: mfaRes.rows[0]?.fn_set_organisation_mfa_requirement });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    // --- INVITATIONS (TENANT) ROUTES ---
+    app.get('/api/org/invitations', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+
+        const decision = await decide(client, principal, contextId, 'org.members.invite');
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        const invs = await client.query(`SELECT * FROM fn_list_org_invitations();`);
+        return res.status(200).json({ decision, invitations: invs.rows });
+    });
+
     app.post('/api/org/invitations', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
@@ -467,14 +777,110 @@ export function createServer(
             return res.status(403).json({ error: decision.reasonCode, decision });
         }
 
-        return res.status(200).json({
-            decision,
-            invited: {
-                email: body.email,
-                roleKey: body.roleKey || 'member',
-                organisationId: decision.organisationId
+        const email = body.email;
+        const roleKey = body.roleKey || 'member';
+        const department = body.department || null;
+        const jobRole = body.jobRole || null;
+        const reportingManagerMembershipId = body.reportingManagerMembershipId || null;
+        const accessProfileId = body.accessProfileId || null;
+        const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+
+        // Generate unguessable 256-bit token
+        const rawToken = crypto.randomBytes(32).toString('base64url');
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+        try {
+            const invRes = await client.query<{ fn_create_invitation: string }>(`
+                SELECT fn_create_invitation(
+                    $1, $2, $3::uuid, $4, $5, $6::uuid, $7::timestamptz, $8
+                );
+            `, [
+                email,
+                roleKey,
+                accessProfileId,
+                department,
+                jobRole,
+                reportingManagerMembershipId,
+                expiresAt,
+                tokenHash
+            ]);
+            const invitationId = invRes.rows[0]?.fn_create_invitation;
+
+            // Dispatch email via mail sink
+            await sendInvitationMail({
+                to: email,
+                rawToken,
+                invitationId,
+                organisationName: decision.organisationName
+            });
+
+            // Mark invitation sent
+            await client.query(`SELECT fn_mark_invitation_sent($1::uuid);`, [invitationId]);
+
+            return res.status(200).json({
+                decision,
+                invitationId,
+                status: 'Sent',
+                invited: {
+                    email,
+                    roleKey,
+                    organisationId: decision.organisationId
+                }
+            });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/org/invitations/:id/revoke', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+
+        const decision = await decide(client, principal, contextId, 'org.members.invite', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            await client.query(`SELECT fn_revoke_invitation($1::uuid);`, [req.params.id]);
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/org/invitations/:id/resend', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+
+        const decision = await decide(client, principal, contextId, 'org.members.invite', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+
+        const newRawToken = crypto.randomBytes(32).toString('base64url');
+        const newTokenHash = crypto.createHash('sha256').update(newRawToken).digest('hex');
+
+        try {
+            await client.query(`SELECT fn_resend_invitation($1::uuid, $2);`, [req.params.id, newTokenHash]);
+
+            // Fetch recipient email
+            const invEmailQuery = await client.query(`SELECT email FROM public.invitations WHERE id = $1::uuid;`, [req.params.id]);
+            const targetEmail = invEmailQuery.rows[0]?.email;
+            if (targetEmail) {
+                await sendInvitationMail({
+                    to: targetEmail,
+                    rawToken: newRawToken,
+                    invitationId: req.params.id,
+                    organisationName: decision.organisationName
+                });
             }
-        });
+
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
     });
 
     // 404 handler
