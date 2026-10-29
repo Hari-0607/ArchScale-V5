@@ -274,7 +274,7 @@ CREATE POLICY invitations_context_read_policy ON public.invitations
     FOR SELECT TO archscale_app_runtime
     USING (
         is_context_valid() AND
-        organisation_id = fn_current_context_organisation_id()
+        organisation_id = fn_current_context_org_id()
     );
 
 DROP POLICY IF EXISTS memberships_hierarchy_read_policy ON public.memberships;
@@ -282,7 +282,7 @@ CREATE POLICY memberships_hierarchy_read_policy ON public.memberships
     FOR SELECT TO archscale_app_runtime
     USING (
         is_context_valid() AND
-        organisation_id = fn_current_context_organisation_id()
+        organisation_id = fn_current_context_org_id()
     );
 
 -- Rate limits table for database-backed rate limiting (A4)
