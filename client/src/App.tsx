@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import './styles/global.css';
 
-import { setToken, setContextId, logout } from './api/client';
+import { setToken, setContextId, getDemoPersona, logout } from './api/client';
 import { SessionContext, SessionData, ContextData } from './hooks/useSession';
 import { useToast } from './hooks/useToast';
 import { ToastList } from './components/Toast';
@@ -16,23 +16,44 @@ import { AttendancePage } from './pages/frontstage/AttendancePage';
 import { InvitationsPage } from './pages/frontstage/InvitationsPage';
 import { TenantsPage } from './pages/backstage/TenantsPage';
 
-// ── Frontstage nav items ───────────────────────────────────────────────────
-const FRONTSTAGE_NAV: NavItem[] = [
-  { key: 'team',        label: 'Team',         icon: '👥' },
-  { key: 'tasks',       label: 'Tasks',        icon: '✓' },
-  { key: 'attendance',  label: 'Attendance',   icon: '📅' },
-  { key: 'invitations', label: 'Invitations',  icon: '✉' },
-];
-
-// ── Backstage nav items ────────────────────────────────────────────────────
-const BACKSTAGE_NAV: NavItem[] = [
-  { key: 'tenants',  label: 'Tenants',      icon: '🏢' },
-  { key: 'audit',    label: 'Audit Log',    icon: '🔍' },
-  { key: 'support',  label: 'Support',      icon: '🛡' },
-];
-
 // Roles considered backstage (platform super admin)
 const BACKSTAGE_ROLES = new Set(['founder', 'platform_admin']);
+
+// Roles/depts that can see Attendance
+function canSeeAttendance(role?: string, dept?: string): boolean {
+  if (!role) return false;
+  if (role === 'founder') return true;
+  if (dept === 'HR') return true;
+  return false;
+}
+
+export const App: React.FC = () => {
+  const { toasts, addToast, removeToast } = useToast();
+  const [session, setSession] = useState<SessionData | null>(null);
+  const [context, setContext] = useState<ContextData | null>(null);
+  const [activeNav, setActiveNav] = useState('team');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [pickingContext, setPickingContext] = useState(false);
+
+  // Derive persona role/dept — from context (DB), then from demoPersona, then from principal
+  const personaRole = context?.roleKey ?? session?.demoPersona?.role ?? session?.principal.role;
+  const personaDept = context ? undefined : (session?.demoPersona?.dept ?? (session?.principal as any)?.department);
+
+  const isBackstage = !!(session && BACKSTAGE_ROLES.has(personaRole ?? ''));
+  const showAttendance = canSeeAttendance(personaRole, personaDept);
+
+  const getFrontstageNav = (): NavItem[] => [
+    { key: 'team',        label: 'Team',         icon: '👥' },
+    { key: 'tasks',       label: 'Tasks',        icon: '✓' },
+    { key: 'attendance',  label: 'Attendance',   icon: '📅', hidden: !showAttendance },
+    { key: 'invitations', label: 'Invitations',  icon: '✉' },
+  ];
+
+  const BACKSTAGE_NAV: NavItem[] = [
+    { key: 'tenants',  label: 'Tenants',      icon: '🏢' },
+    { key: 'audit',    label: 'Audit Log',    icon: '🔍' },
+    { key: 'support',  label: 'Support',      icon: '🛡' },
+  ];
 
 export const App: React.FC = () => {
   const { toasts, addToast, removeToast } = useToast();
