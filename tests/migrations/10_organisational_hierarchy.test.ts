@@ -8,23 +8,42 @@
  *      - Cycle detection trigger rejects circular chains (A -> B -> A, A -> B -> C -> A)
  *      - Manager must be ACTIVE
  *   2. invitations:
- *      - status enum: Pending, Sent, Accepted, Expired, Revoked
+ *      - status enum: Pending, Sent, Accepted, Expired, Revoked (single spelling)
  *      - unique Pending per (organisation_id, lower(email))
- *      - target fields recorded
+ *      - columns: token_hash, target_role_key, access_profile_id, expires_at,
+ *        invited_by_membership_id, department, job_role, reporting_manager_membership_id,
+ *        sent_at, accepted_at, revoked_at, resend_count
  *   3. organisations.member_min_aal:
- *      - 'aal1' or 'aal2', default 'aal2'
+ *      - 'aal1' or 'aal2', DEFAULT 'aal2'
  *      - Effective minimum = max(roles.min_aal, organisations.member_min_aal)
- *      - aal2 roles can never be lowered by org setting
- *      - only business_owner at aal2 can change it via fn_set_organisation_mfa_requirement (audited)
- *      - intern cannot change it
+ *      - aal2 roles can never be lowered by org setting (org at aal1 never lowers business_owner)
+ *      - intern in org set to aal2 is denied at aal1
+ *      - only business_owner at aal2 can change it via fn_set_organisation_mfa_requirement (parameterless context)
  *   4. access_profiles:
- *      - Can attach to ANY subscriber role
+ *      - Can attach to ANY subscriber role via role_key
+ *      - memberships.profile_id validated: mismatched role_key or org rejected
  *      - Effective permissions = role permissions + profile permissions
- *   5. Security Definer functions reject support contexts (fn_assert_not_support_context)
+ *      - fn_get_effective_permissions() derives from active context; another org's membership returns empty {}
+ *   5. RLS on memberships and invitations:
+ *      - Member sees only their own membership row
+ *      - Member sees only invitations sent to their own email
+ *   6. Definer listing functions:
+ *      - fn_list_org_members() (requires org.members.read)
+ *      - fn_list_org_invitations() (requires org.members.invite)
+ *      - guest, collaborator, intern, executive cannot list
+ *      - leader and business_owner can list
+ *      - support context can read but cannot write
+ *   7. auth_rate_limits:
+ *      - direct DML revoked from archscale_app_runtime
+ *      - fn_rate_limit_hit(key, action, max_attempts, window_seconds) Security Definer
+ *      - action allowlist enforced
+ *      - concurrent calls atomic; never exceed max_attempts
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createIsolatedTestDatabase, RUNTIME_CONFIG } from '../setup/db_connection.js';
+import { decide } from '../../src/authz/decide.js';
+import { VerifiedPrincipal } from '../../src/identity/types.js';
 import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
@@ -35,11 +54,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let adminPool: pg.Pool;
 let runtimeClient: pg.Client;
 
-const USER_OWNER_ID = '30000000-0000-0000-0000-000000000001';
-const USER_MGR_ID   = '30000000-0000-0000-0000-000000000002';
-const USER_EXEC_ID  = '30000000-0000-0000-0000-000000000003';
-const USER_INTERN_ID = '30000000-0000-0000-0000-000000000004';
-const USER_STAFF_ID = '30000000-0000-0000-0000-000000000005';
+const USER_OWNER_ID   = '30000000-0000-0000-0000-000000000001';
+const USER_MGR_ID     = '30000000-0000-0000-0000-000000000002';
+const USER_EXEC_ID    = '30000000-0000-0000-0000-000000000003';
+const USER_INTERN_ID  = '30000000-0000-0000-0000-000000000004';
+const USER_STAFF_ID   = '30000000-0000-0000-0000-000000000005';
+const USER_LEADER_ID  = '30000000-0000-0000-0000-000000000006';
+const USER_GUEST_ID   = '30000000-0000-0000-0000-000000000007';
+const USER_COLLAB_ID  = '30000000-0000-0000-0000-000000000008';
 
 const ORG_A_ID = '30000000-0000-0000-0000-000000000010';
 const ORG_B_ID = '30000000-0000-0000-0000-000000000020';
@@ -50,13 +72,16 @@ let mgrMembershipId: string;
 let execMembershipId: string;
 let internMembershipId: string;
 let staffMembershipId: string;
+let leaderMembershipId: string;
+let guestMembershipId: string;
+let collabMembershipId: string;
 let workspaceAId: string;
 let supportGrantId: string;
 
 beforeAll(async () => {
     adminPool = await createIsolatedTestDatabase('archscale_test_014');
 
-    // Apply migration 014 on top of fresh DB
+    // Apply migration 014
     const m14Sql = fs.readFileSync(path.join(__dirname, '../../migrations/014_organisational_hierarchy_and_invitations.sql'), 'utf-8');
     await adminPool.query(m14Sql);
 
@@ -67,6 +92,9 @@ beforeAll(async () => {
         [USER_EXEC_ID, 'exec@studio.test', 'AS-EXEC01'],
         [USER_INTERN_ID, 'intern@studio.test', 'AS-INT01'],
         [USER_STAFF_ID, 'staff@platform.test', 'AS-STAFF01'],
+        [USER_LEADER_ID, 'leader@studio.test', 'AS-LEAD01'],
+        [USER_GUEST_ID, 'guest@studio.test', 'AS-GST01'],
+        [USER_COLLAB_ID, 'collab@studio.test', 'AS-COL01'],
     ];
     for (const [uid, email, code] of testUsers) {
         await adminPool.query('INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING;', [uid, email]);
@@ -75,10 +103,10 @@ beforeAll(async () => {
 
     // Seed organisations
     await adminPool.query(`
-        INSERT INTO public.organisations (id, name, portal, tenant_type_key, status)
+        INSERT INTO public.organisations (id, name, portal, tenant_type_key, status, member_min_aal)
         VALUES 
-            ($1, 'Studio Design Org', 'subscriber', 'studio_owner', 'ACTIVE'),
-            ($2, 'Other Tenant Org', 'subscriber', 'studio_owner', 'ACTIVE')
+            ($1, 'Studio Design Org', 'subscriber', 'studio_owner', 'ACTIVE', 'aal2'),
+            ($2, 'Other Tenant Org', 'subscriber', 'studio_owner', 'ACTIVE', 'aal2')
         ON CONFLICT (id) DO NOTHING;
     `, [ORG_A_ID, ORG_B_ID]);
 
@@ -110,10 +138,16 @@ beforeAll(async () => {
     `, [USER_OWNER_ID, ORG_A_ID]);
     ownerMembershipId = mOwner.rows[0].id;
 
+    const mLeader = await adminPool.query(`
+        INSERT INTO public.memberships (user_id, organisation_id, role_key, status, reporting_manager_membership_id)
+        VALUES ($1, $2, 'leader', 'ACTIVE', $3) RETURNING id;
+    `, [USER_LEADER_ID, ORG_A_ID, ownerMembershipId]);
+    leaderMembershipId = mLeader.rows[0].id;
+
     const mMgr = await adminPool.query(`
         INSERT INTO public.memberships (user_id, organisation_id, role_key, status, department, job_role, reporting_manager_membership_id)
         VALUES ($1, $2, 'manager_coordinator', 'ACTIVE', 'Design', 'Design Manager', $3) RETURNING id;
-    `, [USER_MGR_ID, ORG_A_ID, ownerMembershipId]);
+    `, [USER_MGR_ID, ORG_A_ID, leaderMembershipId]);
     mgrMembershipId = mMgr.rows[0].id;
 
     const mExec = await adminPool.query(`
@@ -127,6 +161,18 @@ beforeAll(async () => {
         VALUES ($1, $2, 'intern', 'ACTIVE', 'Design', 'Design Intern', now() + interval '30 days') RETURNING id;
     `, [USER_INTERN_ID, ORG_A_ID]);
     internMembershipId = mIntern.rows[0].id;
+
+    const mGuest = await adminPool.query(`
+        INSERT INTO public.memberships (user_id, organisation_id, role_key, status, expires_at)
+        VALUES ($1, $2, 'guest', 'ACTIVE', now() + interval '7 days') RETURNING id;
+    `, [USER_GUEST_ID, ORG_A_ID]);
+    guestMembershipId = mGuest.rows[0].id;
+
+    const mCollab = await adminPool.query(`
+        INSERT INTO public.memberships (user_id, organisation_id, role_key, status, expires_at)
+        VALUES ($1, $2, 'collaborator', 'ACTIVE', now() + interval '14 days') RETURNING id;
+    `, [USER_COLLAB_ID, ORG_A_ID]);
+    collabMembershipId = mCollab.rows[0].id;
 
     const mStaff = await adminPool.query(`
         INSERT INTO public.memberships (user_id, organisation_id, role_key, status)
@@ -158,11 +204,9 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
 
     it('1. memberships: manager must belong to same organisation', async () => {
         // Create user & membership in Org B
-        const otherUserRes = await adminPool.query(`
-            INSERT INTO auth.users (id, email) VALUES ('30000000-0000-0000-0000-000000000099', 'other@b.test') RETURNING id;
-        `);
         await adminPool.query(`
-            INSERT INTO public.users (id, email, user_code) VALUES ('30000000-0000-0000-0000-000000000099', 'other@b.test', 'AS-OTH99');
+            INSERT INTO auth.users (id, email) VALUES ('30000000-0000-0000-0000-000000000099', 'other@b.test') ON CONFLICT DO NOTHING;
+            INSERT INTO public.users (id, email, user_code) VALUES ('30000000-0000-0000-0000-000000000099', 'other@b.test', 'AS-OTH99') ON CONFLICT DO NOTHING;
         `);
         const otherMem = await adminPool.query(`
             INSERT INTO public.memberships (user_id, organisation_id, role_key, status)
@@ -182,8 +226,8 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
     });
 
     it('3. memberships: trigger rejects circular reporting cycles', async () => {
-        // Currently: owner -> mgr -> exec
-        // Attempting to set owner's manager to exec creates cycle: exec -> owner -> mgr -> exec
+        // Currently: owner -> leader -> mgr -> exec
+        // Attempting to set owner's manager to exec creates cycle: exec -> owner -> leader -> mgr -> exec
         await expect(adminPool.query(`
             UPDATE public.memberships SET reporting_manager_membership_id = $1 WHERE id = $2;
         `, [execMembershipId, ownerMembershipId])).rejects.toThrow(/cycle|circular/i);
@@ -202,18 +246,28 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         await adminPool.query(`UPDATE public.memberships SET status = 'ACTIVE' WHERE id = $1;`, [mgrMembershipId]);
     });
 
-    it('5. invitations: status enum and unique pending per (organisation, lower(email))', async () => {
+    it('5. invitations: status enum, columns, and unique pending per (organisation, lower(email))', async () => {
         // Insert a Pending invitation
         const tokenHash = 'abc001hash';
-        await adminPool.query(`
+        const invRes = await adminPool.query(`
             INSERT INTO public.invitations (
                 organisation_id, email, token_hash, target_role_key, department, job_role,
                 reporting_manager_membership_id, invited_by, invited_by_membership_id, expires_at, status
             ) VALUES (
                 $1, 'Invite.Test@Studio.test', $2, 'executive', 'Design', 'Junior Designer',
                 $3, $4, $5, now() + interval '7 days', 'Pending'
-            );
+            ) RETURNING *;
         `, [ORG_A_ID, tokenHash, mgrMembershipId, USER_OWNER_ID, ownerMembershipId]);
+
+        const inv = invRes.rows[0];
+        expect(inv.token_hash).toBe(tokenHash);
+        expect(inv.target_role_key).toBe('executive');
+        expect(inv.department).toBe('Design');
+        expect(inv.job_role).toBe('Junior Designer');
+        expect(inv.reporting_manager_membership_id).toBe(mgrMembershipId);
+        expect(inv.invited_by_membership_id).toBe(ownerMembershipId);
+        expect(inv.status).toBe('Pending');
+        expect(inv.resend_count).toBe(0);
 
         // Duplicate insert with different casing on email must fail unique constraint
         await expect(adminPool.query(`
@@ -223,88 +277,296 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
                 $1, 'invite.test@studio.test', 'abc002hash', 'executive', $2, $3, now() + interval '7 days', 'Pending'
             );
         `, [ORG_A_ID, USER_OWNER_ID, ownerMembershipId])).rejects.toThrow(/unique|uq_invitations_pending/i);
-    });
 
-    it('6. organisations.member_min_aal: default is aal1 and only business_owner at aal2 can change it', async () => {
-        // Check default
-        const orgRes = await adminPool.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [ORG_A_ID]);
-        expect(orgRes.rows[0].member_min_aal).toBe('aal1');
-
-        // Create aal1 context for owner
-        const ctxAal1Res = await adminPool.query(`
-            SELECT fn_create_access_context($1::uuid, 'session_owner_001', $2::uuid, $3::uuid, 'aal1');
-        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
-        const ctxAal1Id = ctxAal1Res.rows[0].fn_create_access_context;
-
-        // fn_set_organisation_mfa_requirement via aal1 context fails
+        // Invalid status spelling is rejected
         await expect(adminPool.query(`
-            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal2');
-        `, [ctxAal1Id])).rejects.toThrow(/aal2|AUTH_AAL/i);
-
-        // Create aal2 context for owner
-        const ctxAal2Res = await adminPool.query(`
-            SELECT fn_create_access_context($1::uuid, 'session_owner_002', $2::uuid, $3::uuid, 'aal2');
-        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
-        const ctxAal2Id = ctxAal2Res.rows[0].fn_create_access_context;
-
-        // Change setting to aal2 via aal2 context succeeds
-        await adminPool.query(`
-            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal2');
-        `, [ctxAal2Id]);
-
-        const updated = await adminPool.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [ORG_A_ID]);
-        expect(updated.rows[0].member_min_aal).toBe('aal2');
-
-        // Reset back to aal1
-        await adminPool.query(`
-            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal1');
-        `, [ctxAal2Id]);
+            INSERT INTO public.invitations (
+                organisation_id, email, token_hash, target_role_key, invited_by, invited_by_membership_id, expires_at, status
+            ) VALUES (
+                $1, 'invalid.status@studio.test', 'abc003hash', 'executive', $2, $3, now() + interval '7 days', 'PENDING'
+            );
+        `, [ORG_A_ID, USER_OWNER_ID, ownerMembershipId])).rejects.toThrow(/invitations_status_check/i);
     });
 
-    it('7. access_profiles: attaches to any subscriber role; effective permissions merge', async () => {
-        // Create an access profile for executive
+    it('6. organisations.member_min_aal: default aal2, effective minimum never lowers aal2 role, intern denied at aal1 in aal2 org', async () => {
+        // Confirm default is aal2
+        const freshOrgRes = await adminPool.query(`
+            INSERT INTO public.organisations (name, portal, tenant_type_key, status)
+            VALUES ('Fresh Org Defaults', 'subscriber', 'studio_owner', 'ACTIVE')
+            RETURNING member_min_aal;
+        `);
+        expect(freshOrgRes.rows[0].member_min_aal).toBe('aal2');
+
+        // Test intern in an org set to aal2:
+        // Create context for intern at aal1
+        const internAal1CtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_intern_aal1', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
+        const internAal1CtxId = internAal1CtxRes.rows[0].fn_create_access_context;
+
+        const internPrincipal: VerifiedPrincipal = {
+            id: USER_INTERN_ID,
+            email: 'intern@studio.test',
+            sessionId: 'sess_intern_aal1',
+            aal: 'aal1',
+            issuer: 'test',
+            audience: 'test',
+            expiresAt: Math.floor(Date.now() / 1000) + 3600
+        };
+
+        // Even though intern role.min_aal is aal1, org member_min_aal is aal2 -> decide() denies with AUTH_AAL
+        const internDecision = await decide(runtimeClient as any, internPrincipal, internAal1CtxId, 'project.records.read');
+        expect(internDecision.allow).toBe(false);
+        if (!internDecision.allow) {
+            expect(internDecision.gateFailed).toBe(8);
+            expect(internDecision.reasonCode).toBe('AUTH_AAL');
+        }
+
+        // Intern at aal2 in aal2 org is allowed
+        const internAal2CtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_intern_aal2', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
+        const internAal2CtxId = internAal2CtxRes.rows[0].fn_create_access_context;
+        const internPrincipalAal2: VerifiedPrincipal = {
+            ...internPrincipal,
+            sessionId: 'sess_intern_aal2',
+            aal: 'aal2'
+        };
+        const internDecisionAal2 = await decide(runtimeClient as any, internPrincipalAal2, internAal2CtxId, 'project.records.read');
+        expect(internDecisionAal2.allow).toBe(true);
+
+        // Setting org to aal1 by business_owner at aal2:
+        const ownerAal2CtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_owner_mfa', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
+        const ownerAal2CtxId = ownerAal2CtxRes.rows[0].fn_create_access_context;
+
+        // Set context via fn_set_app_context
+        await adminPool.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_owner_mfa');`, [ownerAal2CtxId, USER_OWNER_ID]);
+        await adminPool.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`);
+
+        const orgCheck = await adminPool.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [ORG_A_ID]);
+        expect(orgCheck.rows[0].member_min_aal).toBe('aal1');
+
+        // Verify: setting org to aal1 NEVER lowers business_owner (roles.min_aal = aal2)
+        const ownerAal1CtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_owner_aal1', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
+        const ownerAal1CtxId = ownerAal1CtxRes.rows[0].fn_create_access_context;
+
+        const ownerPrincipalAal1: VerifiedPrincipal = {
+            id: USER_OWNER_ID,
+            email: 'owner@studio.test',
+            sessionId: 'sess_owner_aal1',
+            aal: 'aal1',
+            issuer: 'test',
+            audience: 'test',
+            expiresAt: Math.floor(Date.now() / 1000) + 3600
+        };
+
+        const ownerDecision = await decide(runtimeClient as any, ownerPrincipalAal1, ownerAal1CtxId, 'org.members.invite');
+        expect(ownerDecision.allow).toBe(false);
+        if (!ownerDecision.allow) {
+            expect(ownerDecision.gateFailed).toBe(8);
+            expect(ownerDecision.reasonCode).toBe('AUTH_AAL');
+        }
+
+        // Restore org to aal2
+        await adminPool.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_owner_mfa');`, [ownerAal2CtxId, USER_OWNER_ID]);
+        await adminPool.query(`SELECT fn_set_organisation_mfa_requirement('aal2');`);
+    });
+
+    it('7. access_profiles: attaches to any subscriber role; rejected if role or org mismatch; permissions merge', async () => {
+        // Create an access profile for executive role
         const profRes = await adminPool.query(`
-            INSERT INTO public.access_profiles (organisation_id, parent_role_key, name, description, is_active)
-            VALUES ($1, 'executive', 'Senior Executive Approver', 'Can approve member requests', true)
+            INSERT INTO public.access_profiles (organisation_id, parent_role_key, role_key, name, description, is_active)
+            VALUES ($1, 'executive', 'executive', 'Senior Executive Approver', 'Can approve member requests', true)
             RETURNING id;
         `, [ORG_A_ID]);
-        const profileId = profRes.rows[0].id;
+        const execProfileId = profRes.rows[0].id;
 
-        // Grant org.members.approve to this profile
+        // Attempting to attach this executive profile to an intern membership fails with trigger exception
+        await expect(adminPool.query(`
+            UPDATE public.memberships SET profile_id = $1 WHERE id = $2;
+        `, [execProfileId, internMembershipId])).rejects.toThrow(/does not match membership role/i);
+
+        // Attempting to attach profile from Org B to Org A membership fails
+        const profBRes = await adminPool.query(`
+            INSERT INTO public.access_profiles (organisation_id, parent_role_key, role_key, name, description, is_active)
+            VALUES ($1, 'executive', 'executive', 'Org B Executive Profile', 'Desc', true)
+            RETURNING id;
+        `, [ORG_B_ID]);
+        const orgBProfileId = profBRes.rows[0].id;
+
+        await expect(adminPool.query(`
+            UPDATE public.memberships SET profile_id = $1 WHERE id = $2;
+        `, [orgBProfileId, execMembershipId])).rejects.toThrow(/does not match membership organisation/i);
+
+        // Grant org.members.approve to execProfileId
         await adminPool.query(`
             INSERT INTO public.access_profile_permissions (profile_id, permission_key)
             VALUES ($1, 'org.members.approve')
             ON CONFLICT DO NOTHING;
-        `, [profileId]);
+        `, [execProfileId]);
 
-        // Attach profile to exec membership
+        // Attach profile to matching exec membership
         await adminPool.query(`
             UPDATE public.memberships SET profile_id = $1 WHERE id = $2;
-        `, [profileId, execMembershipId]);
+        `, [execProfileId, execMembershipId]);
 
-        // Query effective permissions via definer function
-        const permsRes = await adminPool.query(`
-            SELECT fn_get_effective_permissions($1::uuid) AS perms;
-        `, [execMembershipId]);
+        // Set context for exec
+        const execCtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_exec_perms', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_EXEC_ID, ORG_A_ID, workspaceAId]);
+        const execCtxId = execCtxRes.rows[0].fn_create_access_context;
+
+        await adminPool.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_exec_perms');`, [execCtxId, USER_EXEC_ID]);
+
+        // Query effective permissions parameterless
+        const permsRes = await adminPool.query(`SELECT fn_get_effective_permissions() AS perms;`);
         const perms: string[] = permsRes.rows[0].perms;
-
-        // Must have executive's base permissions PLUS profile's permission
         expect(perms).toContain('project.records.read');
         expect(perms).toContain('org.members.approve');
+
+        // Querying membership belonging to Org B returns empty array
+        const otherOrgMem = await adminPool.query(`SELECT id FROM public.memberships WHERE organisation_id = $1 LIMIT 1;`, [ORG_B_ID]);
+        const crossOrgRes = await adminPool.query(`SELECT fn_get_effective_permissions($1::uuid) AS perms;`, [otherOrgMem.rows[0].id]);
+        expect(crossOrgRes.rows[0].perms).toEqual([]);
     });
 
-    it('8. support context cannot write or modify organization settings', async () => {
-        // Create support context for staff entering ORG_A
+    it('8. RLS: member sees only their own membership row and only their own invitations', async () => {
+        // Set context for intern on runtime client
+        const internCtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_intern_rls', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
+        const internCtxId = internCtxRes.rows[0].fn_create_access_context;
+
+        await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_intern_rls');`, [internCtxId, USER_INTERN_ID]);
+
+        // Direct SELECT on memberships returns ONLY intern's row
+        const memRows = await runtimeClient.query(`SELECT id, user_id FROM public.memberships;`);
+        expect(memRows.rowCount).toBe(1);
+        expect(memRows.rows[0].user_id).toBe(USER_INTERN_ID);
+
+        // Add invitation for intern and invitation for someone else
+        await adminPool.query(`
+            INSERT INTO public.invitations (
+                organisation_id, email, token_hash, target_role_key, invited_by, expires_at, status
+            ) VALUES 
+                ($1, 'intern@studio.test', 'hash_intern_rls', 'intern', $2, now() + interval '7 days', 'Pending'),
+                ($1, 'secret@studio.test', 'hash_secret_rls', 'executive', $2, now() + interval '7 days', 'Pending')
+            ON CONFLICT DO NOTHING;
+        `, [ORG_A_ID, USER_OWNER_ID]);
+
+        // Direct SELECT on invitations returns ONLY invitations for intern's email
+        const invRows = await runtimeClient.query(`SELECT id, email FROM public.invitations;`);
+        expect(invRows.rowCount).toBe(1);
+        expect(invRows.rows[0].email).toBe('intern@studio.test');
+    });
+
+    it('9. definer listing functions: permission-gated (org.members.read / org.members.invite)', async () => {
+        // Helper to test listing under a specific user context
+        async function testListPermissions(userId: string, sessionId: string) {
+            const ctxRes = await adminPool.query(`
+                SELECT fn_create_access_context($1::uuid, $2, $3::uuid, $4::uuid, 'aal2');
+            `, [userId, sessionId, ORG_A_ID, workspaceAId]);
+            const ctxId = ctxRes.rows[0].fn_create_access_context;
+            await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3);`, [ctxId, userId, sessionId]);
+        }
+
+        // 1. Guest: denied for both listing functions
+        await testListPermissions(USER_GUEST_ID, 'sess_guest_list');
+        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_members();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+
+        // 2. Collaborator: denied for both
+        await testListPermissions(USER_COLLAB_ID, 'sess_collab_list');
+        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_members();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+
+        // 3. Intern: denied for both
+        await testListPermissions(USER_INTERN_ID, 'sess_intern_list');
+        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_members();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+
+        // 4. Executive: denied for both
+        await testListPermissions(USER_EXEC_ID, 'sess_exec_list');
+        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_members();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+
+        // 5. Leader: allowed for both
+        await testListPermissions(USER_LEADER_ID, 'sess_leader_list');
+        const leaderMembers = await runtimeClient.query(`SELECT * FROM fn_list_org_members();`);
+        expect(leaderMembers.rowCount).toBeGreaterThanOrEqual(5);
+        const leaderInvs = await runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`);
+        expect(leaderInvs.rowCount).toBeGreaterThanOrEqual(1);
+
+        // 6. Business Owner: allowed for both
+        await testListPermissions(USER_OWNER_ID, 'sess_owner_list');
+        const ownerMembers = await runtimeClient.query(`SELECT * FROM fn_list_org_members();`);
+        expect(ownerMembers.rowCount).toBeGreaterThanOrEqual(5);
+        const ownerInvs = await runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`);
+        expect(ownerInvs.rowCount).toBeGreaterThanOrEqual(1);
+
+        // 7. Support context: allowed to read, denied on write
         const supCtxRes = await adminPool.query(`
             SELECT fn_create_access_context(
-                $1::uuid, 'session_staff_001', $2::uuid, $3::uuid, 'aal2', $4::uuid
+                $1::uuid, 'sess_staff_list', $2::uuid, $3::uuid, 'aal2', $4::uuid
             );
         `, [USER_STAFF_ID, ORG_A_ID, workspaceAId, supportGrantId]);
         const supCtxId = supCtxRes.rows[0].fn_create_access_context;
 
-        // Setting MFA requirement fails because support context is read-only
-        await expect(adminPool.query(`
-            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal1');
-        `, [supCtxId])).rejects.toThrow(/support context|read-only|fn_assert_not_support_context/i);
+        await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_staff_list');`, [supCtxId, USER_STAFF_ID]);
+        const staffMembers = await runtimeClient.query(`SELECT * FROM fn_list_org_members();`);
+        expect(staffMembers.rowCount).toBeGreaterThanOrEqual(5);
+        const staffInvs = await runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`);
+        expect(staffInvs.rowCount).toBeGreaterThanOrEqual(1);
+
+        // Support context denied on mutations
+        await expect(runtimeClient.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`))
+            .rejects.toThrow(/support contexts are read-only|AUTH_SUPPORT_READ_ONLY/i);
+    });
+
+    it('10. auth_rate_limits: runtime direct DML revoked; fn_rate_limit_hit atomic and enforces limit', async () => {
+        // Direct DML from runtime must fail
+        await expect(runtimeClient.query(`SELECT * FROM public.auth_rate_limits;`)).rejects.toThrow(/permission denied/i);
+        await expect(runtimeClient.query(`INSERT INTO public.auth_rate_limits (key, action) VALUES ('k', 'signin');`)).rejects.toThrow(/permission denied/i);
+        await expect(runtimeClient.query(`DELETE FROM public.auth_rate_limits;`)).rejects.toThrow(/permission denied/i);
+
+        // Invalid action is rejected by definer function
+        await expect(runtimeClient.query(`SELECT fn_rate_limit_hit('ip:10.0.0.1', 'invalid_action', 5, 60);`))
+            .rejects.toThrow(/AUTH_RATE_LIMIT_INVALID_ACTION/i);
+
+        // Single statement upsert respects max_attempts (5 attempts allowed, 6th denied)
+        const rateKey = 'ip:192.168.1.100';
+        for (let i = 1; i <= 5; i++) {
+            const hitRes = await runtimeClient.query<{ fn_rate_limit_hit: boolean }>(
+                `SELECT fn_rate_limit_hit($1, 'signin', 5, 60);`,
+                [rateKey]
+            );
+            expect(hitRes.rows[0].fn_rate_limit_hit).toBe(true);
+        }
+
+        // 6th attempt: exceeded
+        const exceedRes = await runtimeClient.query<{ fn_rate_limit_hit: boolean }>(
+            `SELECT fn_rate_limit_hit($1, 'signin', 5, 60);`,
+            [rateKey]
+        );
+        expect(exceedRes.rows[0].fn_rate_limit_hit).toBe(false);
+
+        // Concurrent atomic test: 10 parallel hits with max_attempts = 4 on a new key
+        const concurrentKey = 'ip:10.99.99.99';
+        const promises = Array.from({ length: 10 }, () =>
+            adminPool.query<{ fn_rate_limit_hit: boolean }>(
+                `SELECT fn_rate_limit_hit($1, 'signin', 4, 60);`,
+                [concurrentKey]
+            )
+        );
+        const results = await Promise.all(promises);
+        const allowedCount = results.filter(r => r.rows[0].fn_rate_limit_hit === true).length;
+        const deniedCount = results.filter(r => r.rows[0].fn_rate_limit_hit === false).length;
+
+        expect(allowedCount).toBe(4);
+        expect(deniedCount).toBe(6);
     });
 });
