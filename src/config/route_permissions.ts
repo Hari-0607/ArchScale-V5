@@ -281,10 +281,6 @@ export const ROUTE_PERMISSIONS: Record<string, RoutePermission> = {
     'org.audit.read': {
         permission: 'org.audit.read',
         portal: 'subscriber'
-    },
-    'test.nonexistent.permission': {
-        permission: 'test.nonexistent.permission',
-        portal: 'subscriber'
     }
 };
 

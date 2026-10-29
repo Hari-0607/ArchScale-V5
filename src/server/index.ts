@@ -375,9 +375,9 @@ export function createServer(
             const client = await dbPool.connect();
             try {
                 const sessionsRes = await client.query(`
-                    SELECT id AS context_id, session_id, organisation_id, workspace_id, aal_level, created_at, expires_at, is_valid
+                    SELECT id AS context_id, session_id, organisation_id, workspace_id, aal_level, created_at, expires_at
                     FROM public.access_contexts
-                    WHERE user_id = $1::uuid AND is_valid = true
+                    WHERE user_id = $1::uuid AND revoked_at IS NULL AND expires_at > now()
                     ORDER BY created_at DESC;
                 `, [principal.id]);
                 return res.status(200).json({ sessions: sessionsRes.rows });
@@ -397,8 +397,8 @@ export function createServer(
             try {
                 await client.query(`
                     UPDATE public.access_contexts
-                    SET is_valid = false
-                    WHERE user_id = $1::uuid AND (id = $2::uuid OR session_id = $2);
+                    SET revoked_at = now()
+                    WHERE user_id = $1::uuid AND (id = $2::uuid OR session_id = $2) AND revoked_at IS NULL;
                 `, [principal.id, sessionId]);
                 return res.status(200).json({ success: true });
             } finally {
@@ -417,8 +417,8 @@ export function createServer(
             try {
                 await client.query(`
                     UPDATE public.access_contexts
-                    SET is_valid = false
-                    WHERE user_id = $1::uuid;
+                    SET revoked_at = now()
+                    WHERE user_id = $1::uuid AND revoked_at IS NULL;
                 `, [principal.id]);
 
                 if (principal.sessionId) {

@@ -483,6 +483,12 @@ describe('Authorization Denial Gates (decide)', () => {
     });
 
     it('Gate 8: Fails closed (AUTH_PERMISSION) when permission key does not exist (F1)', async () => {
+        const { ROUTE_PERMISSIONS } = await import('../../src/config/route_permissions.js');
+        (ROUTE_PERMISSIONS as any)['test.nonexistent.permission'] = {
+            permission: 'test.nonexistent.permission',
+            portal: 'subscriber'
+        };
+
         const client = await adminPool.connect();
         try {
             const principal: VerifiedPrincipal = {
@@ -502,6 +508,7 @@ describe('Authorization Denial Gates (decide)', () => {
                 expect(decision.reasonCode).toBe('AUTH_PERMISSION');
             }
         } finally {
+            delete (ROUTE_PERMISSIONS as any)['test.nonexistent.permission'];
             client.release();
         }
     });

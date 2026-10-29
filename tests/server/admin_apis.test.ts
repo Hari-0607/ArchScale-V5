@@ -282,7 +282,7 @@ describe('Backstage Platform Administration APIs (A5)', () => {
         expect(data.organisationId).toBeDefined();
 
         const check = await adminPool.query(`SELECT status FROM public.organisations WHERE id = $1;`, [data.organisationId]);
-        expect(check.rows[0].status).toBe('PENDING');
+        expect(check.rows[0].status).toBe('APPLIED');
     });
 
     it('8. POST /api/platform/support/grants and revoke grant', async () => {

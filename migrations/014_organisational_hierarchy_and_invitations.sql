@@ -1376,8 +1376,8 @@ BEGIN
 
     -- Invalidate any active contexts for suspended member in this org
     UPDATE public.access_contexts
-    SET is_valid = false
-    WHERE membership_id = p_target_membership_id;
+    SET revoked_at = now()
+    WHERE membership_id = p_target_membership_id AND revoked_at IS NULL;
 
     PERFORM fn_audit_append(
         'member.suspended',
@@ -1543,7 +1543,7 @@ BEGIN
         p_name,
         'subscriber',
         p_tenant_type_key,
-        'PENDING',
+        'APPLIED',
         'aal2'
     )
     RETURNING id INTO v_org_id;
@@ -1596,8 +1596,8 @@ BEGIN
 
     -- Invalidate all active contexts in target org
     UPDATE public.access_contexts
-    SET is_valid = false
-    WHERE organisation_id = p_target_org_id;
+    SET revoked_at = now()
+    WHERE organisation_id = p_target_org_id AND revoked_at IS NULL;
 
     PERFORM fn_audit_append(
         'platform.org.suspended',
@@ -1702,8 +1702,8 @@ BEGIN
 
     -- Invalidate any active context tied to this grant
     UPDATE public.access_contexts
-    SET is_valid = false
-    WHERE support_grant_id = p_grant_id;
+    SET revoked_at = now()
+    WHERE support_grant_id = p_grant_id AND revoked_at IS NULL;
 
     PERFORM fn_audit_append(
         'platform.support.grant.revoked',
