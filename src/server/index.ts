@@ -64,6 +64,7 @@ export function createServer(
     };
 
     // 0. Static demo UI
+    app.use(express.static(path.join(__dirname, 'public')));
     app.get('/', (req: Request, res: Response) => {
         const filePath = path.join(__dirname, 'public', 'index.html');
         if (fs.existsSync(filePath)) {
@@ -604,6 +605,21 @@ export function createServer(
 
             (req as any).contextId = contextId;
             (req as any).dbClient = client;
+
+            try {
+                const ctxQuery = await client.query(`
+                    SELECT ac.organisation_id, m.role_key, m.department, m.job_role
+                    FROM public.access_contexts ac
+                    JOIN public.memberships m ON m.id = ac.membership_id
+                    WHERE ac.id = $1::uuid;
+                `, [contextId]);
+                const ctxRow = ctxQuery.rows[0];
+                if (ctxRow) {
+                    (req as any).contextRole = ctxRow.role_key;
+                    (req as any).contextDept = ctxRow.department;
+                    (req as any).organisationId = ctxRow.organisation_id;
+                }
+            } catch {}
 
             let released = false;
             const cleanup = () => {
