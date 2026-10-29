@@ -19,11 +19,12 @@ export function getApiContext() {
   return currentContext;
 }
 
-function getHeaders(isJson = true): Record<string, string> {
+function getHeaders(isJson = true, overrideToken?: string): Record<string, string> {
   const headers: Record<string, string> = {};
   if (isJson) headers['Content-Type'] = 'application/json';
-  if (currentSession?.accessToken) {
-    headers['Authorization'] = `Bearer ${currentSession.accessToken}`;
+  const token = overrideToken || currentSession?.accessToken;
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
   if (currentContext?.contextId) {
     headers['X-ArchScale-Context'] = currentContext.contextId;
@@ -34,12 +35,13 @@ function getHeaders(isJson = true): Record<string, string> {
 export async function apiRequest<T = any>(
   path: string,
   method = 'GET',
-  body?: any
+  body?: any,
+  overrideToken?: string
 ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
   try {
     const res = await fetch(path, {
       method,
-      headers: getHeaders(body !== undefined),
+      headers: getHeaders(body !== undefined, overrideToken),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
@@ -65,8 +67,8 @@ export async function quickLoginApi(roleKey: string) {
   return apiRequest('/api/demo/quick-login', 'POST', { key: roleKey });
 }
 
-export async function verifyMfaApi(code: string, bypass = false) {
-  return apiRequest('/api/session/mfa/verify', 'POST', { code, bypass });
+export async function verifyMfaApi(code: string, bypass = false, token?: string) {
+  return apiRequest('/api/session/mfa/verify', 'POST', { code, bypass }, token);
 }
 
 export async function logoutApi() {
