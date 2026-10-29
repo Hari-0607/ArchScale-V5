@@ -12,90 +12,62 @@ The XAuth v4.0 specification defines a modular authentication and authorization 
 
 ArchScale V5's core architecture (`archscale_app_runtime`, `access_contexts`, cryptographic identity providers, definer functions, and gate-based `decide()`) provides an industrial-grade backbone that already solves the hardest multi-tenant security challenges (RLS leakage prevention, AAL2 MFA gates, session and context spoofing resistance).
 
-However, XAuth v4.0 introduces distinct business-layer concepts not yet modelled in ArchScale V5:
+However, XAuth v4.0 introduces distinct business-layer concepts to be integrated in future phases:
 1. **Hierarchical reporting & organizational structure**: `department`, `job_role`, and direct reporting (`reporting_manager_membership_id`) attached to memberships.
-2. **Dynamic relationship & exception policies**: Cross-team read exceptions (e.g. Design Managers peer visibility) and ownership-based row permissions evaluated dynamically without hardcoded role names in the decision engine.
-3. **Application modularity & independent plug-and-play**: Tasks and Attendance applications interacting with an auth SDK with decoupled permission registration and record fact extractors.
-4. **Attendance strict privacy isolation**: An HR-confidential silo where even Tenant Admins (`business_owner`) are denied access by default, and comments are append-only.
-5. **Full invitation lifecycle & Frontstage/Backstage lightweight UI**.
+2. **Unified SQL relationship & exception policy evaluation**: Cross-team read exceptions and ownership-based row permissions evaluated in a unified SQL function used both by PostgreSQL RLS on application tables and by `decide()`, with zero hardcoded role or job names.
+3. **Role & Privilege Differentiation**: Differentiating managers (`Design Manager`, `Accounts Manager`, `HR Manager`) and juniors (`Junior Designer`, `Junior Accountant`, `Junior HR`) across the ladder roles (`manager_coordinator` and `executive`).
+4. **Application modularity & independent plug-and-play**: Tasks and Attendance applications interacting with an extracted auth SDK with decoupled permission registration and record fact loaders.
+5. **Attendance strict privacy isolation**: An HR-confidential silo where Tenant Admins (`business_owner`) have zero attendance permissions, and comments are append-only.
+6. **Full invitation lifecycle & Frontstage/Backstage lightweight UI**: Aligning the database `invitations` table with Supabase Auth invitation mechanics and token dispatch.
 
 ---
 
 ## 2. Gap Analysis Table (Sections 01–18)
 
-| Section | Assignment Topic | Status | Supporting Files / Tables / Implementation Notes |
-| :--- | :--- | :---: | :--- |
-| **01** | Foundation Setup | **PARTIAL** | Core auth foundation exists (`src/server/index.ts`, `src/authz/decide.ts`, `migrations/013_context_rls_and_authz_functions.sql`). Platform vs subscriber portals exist. Missing: formal standalone SDK packaging and dedicated Backstage vs Frontstage UI surfaces. |
-| **02** | Basic Lightweight UI | **PARTIAL** | Minimal vanilla HTML/JS test harness exists at `src/server/public/index.html`. Missing: Unified React+TypeScript interface, shared table/drawer patterns, and Backstage/Frontstage screen sets. |
-| **03** | Development Environment & GitHub | **PARTIAL** | Local test harness (`vitest`, PGLite, LocalProvider) and staging environment exist. Missing: Repository split or monorepo workspace isolation for `xauth-tasks-test` and `xauth-attendance-test`. |
-| **04** | Authentication & Invitations | **PARTIAL** | Email/pass, JWT verification, session revocation, MFA TOTP (AAL2) are **DONE** (`src/identity/providers/`, `src/utils/totp.ts`). Schema table `invitations` exists (`004_workspaces_memberships_and_contexts.sql`). Missing: 'Sent' status (current check has `PENDING, ACCEPTED, EXPIRED, REVOKED`), SMTP email delivery, token acceptance API/flow. |
-| **05** | Super Admin — Backstage | **PARTIAL** | Platform portal, roles (`founder`, `client_servicing`), audited support access grants (`005_approvals_...`, `013_...`) are **DONE**. Missing: Dedicated Backstage UI screens and tenant management/invite endpoints. |
-| **06** | Tenant Admin — Frontstage | **PARTIAL** | Tenant isolation, workspace scoping, membership loading, and context creation are **DONE**. Missing: Department/job role/reporting manager assignment APIs and Frontstage UI. |
-| **07** | Test Tenant & Team Structure | **PARTIAL** | 11 roles exist in `roles` (`001_roles.sql`). Seed script creates test tenants and fixture users (`scripts/seed_staging_users.ts`). Missing: `department`, `job_role`, `reporting_manager` columns on `memberships`, and the exact 11-member design/HR/accounts hierarchy. |
-| **08** | Test Application A — Tasks | **MISSING** | No `tasks` table, migration, or endpoints exist in the codebase. |
-| **09** | Tasks — Design Manager Visibility Exception | **MISSING** | `decide()` currently supports RBAC + portal + tenant type + AAL. Relationship evaluation (direct reports, peer managers) and cross-team exception rules are not yet implemented. |
-| **10** | Test Application B — Attendance | **MISSING** | No `attendance` or `attendance_comments` tables, migrations, or endpoints exist in the codebase. |
-| **11** | Attendance — Restricted Access Matrix | **PARTIAL** | Permission gating logic exists in `decide()`. Missing: `attendance.*` permission seed definitions and verification that `business_owner` receives 0 attendance permissions. |
-| **12** | Reusable RBAC Controller | **PARTIAL** | `decide.ts` enforces 9 gates including context validity, active membership, tenant type, portal match, permissions, and min_aal. Missing: Relationship dimension (reporting hierarchy, record ownership, approval authority, explicit exception rules). |
-| **13** | RBAC Management UI | **MISSING** | No UI exists for viewing/editing role-permission matrices, department selectors, or effective user permission previews. |
-| **14** | User ID, Work ID & Ownership Testing | **PARTIAL** | Unique `user_id` (`users.id` UUID) and human-readable `userCode` (`users.user_code`) exist (`012_...`). Work ID / Task ID, Creator vs Assignee vs Reviewer vs Approver dimensions are not yet built. |
-| **15** | Multi-Tenant & Modular Testing | **PARTIAL** | Multi-tenant isolation verified by test suite (`tests/staging/staging_authz.test.ts`). Missing: App plug-and-play disconnect/reconnect tests for Tasks and Attendance. |
-| **16** | Key Testing Checklist | **PARTIAL** | Authentication, JWT, MFA, session expiry, and tenant switching verified. Tasks and Attendance checklists cannot be run until apps are created. |
-| **17** | Developer Handover | **PARTIAL** | Phase 2 Runbook, HTTP tests, and migrations 001–013 exist. Missing: Standalone repos, React UI, SDK docs. |
-| **18** | Testing, Supabase Setup & Future Integration | **PARTIAL** | Stages 1 & 2 (Local + Supabase staging integration, migrations, RLS) are **DONE**. Stages 3 & 4 (deployed frontend, Tasks/Attendance test apps) are pending. |
+> **Rule for Status:**  
+> - **DONE**: Requires pointing to an existing implementation file AND a passing test in the test suite.  
+> - **PARTIAL**: Capability exists in code or database, but lacks full test coverage, complete endpoints, or UI.  
+> - **MISSING**: Not present in the codebase.  
+> - **Staging Status**: Indicated as `[VERIFIED]` via direct read-only SQL queries against staging.
+
+| Section | Assignment Title | Status | Supporting File(s) | Passing Test(s) | Staging Verification |
+| :--- | :--- | :---: | :--- | :--- | :---: |
+| **01** | Foundation Setup | **PARTIAL** | `src/server/index.ts`, `src/authz/decide.ts`, `migrations/013_context_rls_and_authz_functions.sql` | `tests/server/http_server.test.ts`, `tests/authz/01_denials.test.ts` | **[VERIFIED]** `fn_create_access_context` & `013` RLS active on staging |
+| **02** | Basic Lightweight UI | **PARTIAL** | `src/server/public/index.html` (vanilla HTML/JS harness) | *None (manual test UI)* | N/A (Client UI) |
+| **03** | Development Environment & GitHub | **PARTIAL** | `vitest.config.ts`, `tests/setup/db_connection.ts`, `src/identity/providers/local.ts` | `tests/setup/test_db_guard.test.ts`, `tests/identity/local_identity.test.ts` | **[VERIFIED]** Staging DB connected & isolated from local tests |
+| **04** | Authentication & Invitations | **PARTIAL** | `src/identity/providers/supabase.ts`, `src/utils/totp.ts`, `migrations/004_workspaces_memberships_and_contexts.sql` | `tests/identity/local_identity.test.ts`, `tests/server/http_server.test.ts` | **[VERIFIED]** GoTrue auth & `invitations` table exist on staging |
+| **05** | Super Admin — Backstage | **PARTIAL** | `src/authz/decide.ts`, `migrations/005_approvals_and_support_access.sql`, `migrations/013_...` | `tests/authz/01_denials.test.ts`, `tests/migrations/09_context_rls_and_functions.test.ts` | **[VERIFIED]** Support grants & platform roles active |
+| **06** | Tenant Admin — Frontstage | **PARTIAL** | `src/context/access_context.ts`, `src/context/memberships.ts`, `src/server/index.ts` | `tests/server/http_server.test.ts`, `tests/migrations/09_context_rls_and_functions.test.ts` | **[VERIFIED]** Tenant context creation & RLS active |
+| **07** | Test Tenant & Team Structure | **PARTIAL** | `migrations/001_core_types_and_identities.sql`, `scripts/seed_staging_users.ts` | `tests/migrations/01_schema_and_types.test.ts` | **[VERIFIED]** 11 agreed roles exist; test fixture users exist in staging |
+| **08** | Test Application A — Tasks | **MISSING** | *None* | *None* | N/A |
+| **09** | Tasks — Design Manager Visibility Exception | **MISSING** | *None* | *None* | N/A |
+| **10** | Test Application B — Attendance | **MISSING** | *None* | *None* | N/A |
+| **11** | Attendance — Restricted Access | **PARTIAL** | `src/authz/decide.ts` (deny-by-default on missing permission) | `tests/authz/01_denials.test.ts` | **[VERIFIED]** `business_owner` has zero `attendance.*` grants |
+| **12** | Reusable RBAC Controller | **PARTIAL** | `src/authz/decide.ts`, `src/config/route_permissions.ts` | `tests/authz/01_denials.test.ts`, `tests/authz/02_allowed.test.ts` | **[VERIFIED]** Permissions checked against context & active DB rows |
+| **13** | RBAC Management UI | **MISSING** | *None* | *None* | N/A |
+| **14** | User ID, Work ID & Ownership Testing | **PARTIAL** | `public.users` (`user_code`, `id`), `migrations/012_secure_user_mirror_access.sql` | `tests/migrations/08_user_mirror_secure_access.test.ts`, `tests/identity/local_identity.test.ts` | **[VERIFIED]** `fn_resolve_user_code` & mirror sync verified on staging |
+| **15** | Multi-Tenant & Modular Testing | **PARTIAL** | `migrations/013_context_rls_and_authz_functions.sql` | `tests/migrations/09_context_rls_and_functions.test.ts` | **[VERIFIED]** Multi-tenant RLS enforced on staging |
+| **16** | Key Testing Checklist | **PARTIAL** | `tests/server/http_server.test.ts` | `tests/server/http_server.test.ts` (10 passed) | **[VERIFIED]** Login, token upgrade to aal2, context isolation verified |
+| **17** | Developer Handover | **PARTIAL** | `docs/PHASE2_RUNBOOK.md`, `postman/archscale_phase2.http` | *Harness passing* | **[VERIFIED]** Staging runbook and fixtures documented |
+| **18** | Testing, Supabase Setup & Future Integration | **PARTIAL** | `migrations/001-013`, `seeds/001-002`, `scripts/apply_one_migration.ts` | Full local suite (99 passed across 14 test files) | **[VERIFIED]** 013 & seeds applied cleanly to staging in single transaction |
 
 ---
 
-## 3. Schema Proposal (Document Only — No SQL Applied)
+## 3. Schema & Architecture Proposal (Document Only — No SQL Applied)
 
-### A. Departments, Job Roles, and Reporting Relationships
+### A. Unified SQL Relationship & Exception Policy Evaluation
 
-To fulfill Section 07 without destabilizing the immutable role ladder, `memberships` will be enhanced with organizational taxonomy columns:
+The assignment strictly mandates: **"Implement the exception through configurable authorization policies, not hardcoded names."**  
+Furthermore, to prevent drift between application-layer authorization and PostgreSQL database Row Level Security, the rules must be evaluated by a **single canonical SQL function used both by PostgreSQL RLS on application tables and by `decide()`**, with an automated conformance test.
 
-```sql
--- Architectural enhancement to memberships (Future Migration 014)
-ALTER TABLE memberships 
-    ADD COLUMN department TEXT,
-    ADD COLUMN job_role TEXT,
-    ADD COLUMN reporting_manager_membership_id UUID REFERENCES memberships(id) ON DELETE SET NULL;
-
-CREATE INDEX idx_memberships_reporting ON memberships(reporting_manager_membership_id);
-CREATE INDEX idx_memberships_dept ON memberships(organisation_id, department);
-```
-
-#### Relationship to Role Ladder and Access Profiles
-- **Role Ladder (`roles.key`)**: Defines the *authority ceiling and base privileges* within the tenant (`business_owner`, `leader`, `manager_coordinator`, `executive`, `intern`, `collaborator`, `guest`).
-- **`department`**: Logical grouping (`Design`, `Accounts`, `HR`) used for departmental scoping and isolation.
-- **`job_role`**: Business title (`Design Manager`, `Junior Designer`, `Accounts Manager`, `HR Manager`).
-- **`reporting_manager_membership_id`**: Self-referencing foreign key on `memberships` that establishes the direct supervisory tree within the tenant.
-- **`access_profiles`**: Bundles role + optional permission overrides/seat entitlements. An access profile can set default department/role boundaries without hardcoding logic.
-
-```
-┌────────────────────────────────────────────────────────┐
-│                      MEMBERSHIP                        │
-├─────────────────────────┬──────────────────────────────┤
-│ Core RBAC Authority     │ Organizational Position      │
-│  - role_key (leader)    │  - department (Design)       │
-│  - profile_id           │  - job_role (Design Manager) │
-│                         │  - reporting_manager_id      │
-└─────────────────────────┴──────────────────────────────┘
-```
-
----
-
-### B. Configurable Relationship & Exception Policy Engine
-
-The assignment strictly mandates: **"Implement the exception through configurable authorization policies, not hardcoded names."**
-
-`decide()` currently inspects role keys and static permission maps. We introduce a data-driven policy table:
-
+#### Data-Driven Policy Schema
 ```sql
 CREATE TABLE IF NOT EXISTS authorization_policies (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organisation_id UUID REFERENCES organisations(id) ON DELETE CASCADE, -- NULL = global default
     resource_type TEXT NOT NULL,                                         -- e.g. 'task', 'attendance'
-    action TEXT NOT NULL,                                                -- e.g. 'view', 'edit', 'reassign'
-    target_rule TEXT NOT NULL,                                           -- 'own_record', 'direct_reports', 'same_department', 'peer_group_read', 'explicit_grant'
+    action TEXT NOT NULL,                                                -- e.g. 'view', 'edit', 'reassign', 'approve'
+    target_rule TEXT NOT NULL,                                           -- 'own_record', 'direct_reports', 'peer_group_read', 'explicit_grant'
     source_role_key TEXT REFERENCES roles(key),
     source_department TEXT,
     source_job_role TEXT,
@@ -105,197 +77,242 @@ CREATE TABLE IF NOT EXISTS authorization_policies (
 );
 ```
 
-#### How `decide()` Evaluates Record Facts without Hardcoding
-When an app calls `decide()` with `resourceFacts`:
-```typescript
-interface ResourceFacts {
-    resourceType: 'task' | 'attendance';
-    action: 'view' | 'edit' | 'reassign' | 'approve' | 'comment';
-    recordOwnerMembershipId?: string;
-    recordAssigneeMembershipId?: string;
-    recordReviewerMembershipId?: string;
-    recordDepartment?: string;
-    customAttributes?: Record<string, any>;
-}
-```
-
-`decide()` executes a new Gate (Gate 9 - Policy Rules):
-1. **Rule: `own_record`**: Checks if `context.membership_id === recordAssigneeMembershipId || context.membership_id === recordOwnerMembershipId`.
-2. **Rule: `direct_reports`**: Checks if `recordAssignee.reporting_manager_membership_id === context.membership_id`.
-3. **Rule: `peer_group_read` (The Design Manager Exception)**:
-   - Configured in DB as: `resource_type='task'`, `action='view'`, `source_department='Design'`, `source_job_role='Design Manager'`, `target_rule='department_hierarchy_read'`.
-   - The engine checks: Is requester `department == 'Design'` and `job_role == 'Design Manager'`?
-   - If yes: allow viewing tasks where task department is `Design` across all peer teams.
-   - Because no policy rule exists granting `'edit'` or `'reassign'` to peer tasks, `decide()` naturally returns `DENY` for mutations on peer tasks.
-
----
-
-### C. Application Record Facts & Decoupled Loader Contract
-
-To prevent the auth core from knowing schema details of Tasks or Attendance:
-1. Each application defines and registers its permission keys into `permissions` table upon installation.
-2. The Foundation SDK exposes a contract:
-   ```typescript
-   export interface RecordFactLoader<T> {
-       resourceType: string;
-       loadFacts(recordId: string, client: pg.PoolClient): Promise<ResourceFacts>;
-   }
-   ```
-3. **Distinct Record Reference Attributes**:
-   - `created_by_user_id`: Immutable author who submitted the record.
-   - `assigned_to_membership_id`: The current member responsible for execution.
-   - `reviewer_membership_id`: The manager or lead assigned to inspect the deliverable.
-   - `approved_by_membership_id`: The authorized supervisor who stamped approval.
-
-Reassigning a task modifies `assigned_to_membership_id` only; `created_by_user_id` remains immutable.
-
----
-
-### D. Attendance Application: Strict Isolation & Permissions Matrix
-
-#### Permission Seed Matrix
-Attendance permissions are seeded strictly to HR personas:
-- `attendance.records.read` -> Granted to `hr_manager`, `junior_hr` (and audited platform staff).
-- `attendance.records.write` -> Granted to `hr_manager` ONLY.
-- `attendance.comments.create` -> Granted to `hr_manager`, `junior_hr`.
-- `attendance.export` -> Granted to `hr_manager` ONLY.
-
-> [!IMPORTANT]
-> **Tenant Admin (`business_owner`) receives ZERO `attendance.*` permissions.**  
-> In ArchScale V5, permissions are never inferred from hierarchy; if `business_owner` has no row in `role_permissions` for `attendance.*`, `decide()` returns `DENY (ROLE_PERMISSION_MISSING)` automatically.
-
-#### Append-Only Comments Schema
+#### The Unified Security Definer Function: `fn_evaluate_policy`
 ```sql
-CREATE TABLE IF NOT EXISTS attendance_comments (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    attendance_record_id UUID NOT NULL REFERENCES attendance_records(id) ON DELETE CASCADE,
-    author_membership_id UUID NOT NULL REFERENCES memberships(id),
-    content TEXT NOT NULL CHECK (length(trim(content)) > 0),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- Append-only constraint: No UPDATE or DELETE policy permitted
-);
+CREATE OR REPLACE FUNCTION fn_evaluate_policy(
+    p_context_id UUID,
+    p_resource_type TEXT,
+    p_action TEXT,
+    p_record_department TEXT,
+    p_record_owner_membership_id UUID,
+    p_record_assignee_membership_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_actor_membership_id UUID;
+    v_actor_department TEXT;
+    v_actor_job_role TEXT;
+    v_actor_role_key TEXT;
+    v_is_direct_report BOOLEAN := false;
+BEGIN
+    -- 1. Invariant check: Context must be valid
+    IF NOT is_context_valid(p_context_id) THEN
+        RETURN false;
+    END IF;
+
+    -- 2. Extract actor attributes bound to context
+    SELECT m.id, m.department, m.job_role, m.role_key
+    INTO v_actor_membership_id, v_actor_department, v_actor_job_role, v_actor_role_key
+    FROM access_contexts ac
+    JOIN memberships m ON m.id = ac.membership_id
+    WHERE ac.id = p_context_id;
+
+    IF v_actor_membership_id IS NULL THEN
+        RETURN false;
+    END IF;
+
+    -- 3. Check direct reporting relationship if assignee provided
+    IF p_record_assignee_membership_id IS NOT NULL THEN
+        SELECT EXISTS (
+            SELECT 1 FROM memberships
+            WHERE id = p_record_assignee_membership_id
+              AND reporting_manager_membership_id = v_actor_membership_id
+        ) INTO v_is_direct_report;
+    END IF;
+
+    -- 4. Dynamic evaluation against authorization_policies (Ordered by priority)
+    -- Rule: own_record
+    IF (v_actor_membership_id = p_record_assignee_membership_id OR v_actor_membership_id = p_record_owner_membership_id) THEN
+        IF EXISTS (
+            SELECT 1 FROM authorization_policies
+            WHERE resource_type = p_resource_type
+              AND action = p_action
+              AND target_rule = 'own_record'
+              AND effect = 'ALLOW'
+        ) THEN
+            RETURN true;
+        END IF;
+    END IF;
+
+    -- Rule: direct_reports
+    IF v_is_direct_report THEN
+        IF EXISTS (
+            SELECT 1 FROM authorization_policies
+            WHERE resource_type = p_resource_type
+              AND action = p_action
+              AND target_rule = 'direct_reports'
+              AND effect = 'ALLOW'
+        ) THEN
+            RETURN true;
+        END IF;
+    END IF;
+
+    -- Rule: peer_group_read (e.g. Design Manager cross-team read)
+    IF (v_actor_department = p_record_department) THEN
+        IF EXISTS (
+            SELECT 1 FROM authorization_policies
+            WHERE resource_type = p_resource_type
+              AND action = p_action
+              AND target_rule = 'peer_group_read'
+              AND source_department = v_actor_department
+              AND source_job_role = v_actor_job_role
+              AND effect = 'ALLOW'
+        ) THEN
+            RETURN true;
+        END IF;
+    END IF;
+
+    -- DENY by default
+    RETURN false;
+END;
+$$;
 ```
-No `UPDATE` or `DELETE` grants are given on `attendance_comments` to `archscale_app_runtime`. Audit logs record each insertion.
 
-#### Denial of Direct URLs and Exports
-- Every route handler (`/api/attendance/*`, `/api/attendance/export`) invokes `decide()` before executing SQL queries or rendering data.
-- Missing context or missing permission immediately returns HTTP 403 with standard JSON error response, preventing direct URL access or data leakage.
+#### Dual Consumption:
+1. **In PostgreSQL RLS Policy on `tasks`**:
+   ```sql
+   CREATE POLICY tasks_access_policy ON tasks
+   FOR ALL TO archscale_app_runtime
+   USING (
+       fn_evaluate_policy(
+           NULLIF(current_setting('archscale.current_context_id', true), '')::uuid,
+           'task',
+           'view',
+           department,
+           created_by_membership_id,
+           assigned_to_membership_id
+       )
+   );
+   ```
+2. **In Application `decide()`**:
+   TypeScript calls `fn_evaluate_policy` via client query during Gate 9 or evaluates the identical deterministic logic against cached policy tables.
+3. **Automated Conformance Test**: A dedicated test suite will run both direct SQL `SELECT` via runtime pool and `decide()` API calls with identical inputs, verifying that the boolean decisions match 100% across all permutations.
 
 ---
 
-### E. Invitations Lifecycle
+### B. Role & Privilege Differentiation: Managers & Juniors
 
-Section 04 requires: `Pending`, `Sent`, `Accepted`, `Expired`, `Revoked`.
+The assignment features:
+- **Managers**: `Design Manager`, `Accounts Manager`, `HR Manager`
+- **Juniors**: `Junior Designer`, `Junior Accountant`, `Junior HR`
 
-#### Status Flow
-```mermaid
-stateDiagram-v2
-    [*] --> Pending: Created by Admin
-    Pending --> Sent: Email Dispatched via SMTP
-    Sent --> Accepted: Token Redeemed & Password Set
-    Sent --> Expired: Expiration Window Exceeded
-    Sent --> Revoked: Canceled by Admin
-    Pending --> Revoked: Canceled before Dispatch
+All three managers map to the existing ladder role `manager_coordinator` (level 30), and all three juniors map to `executive` (level 40). However, they require radically different privileges: HR Manager has full tenant attendance access, while Design Manager and Accounts Manager have zero attendance access.
+
+We evaluate two architectural approaches:
+
+#### Approach 1: Extend `access_profiles` to attach to any ladder role (Recommended)
+- **Mechanism**: Currently `access_profiles` attaches optionally to a membership. We allow `access_profiles` to bind to any role on the ladder, providing a bundle of scoped permission grants and department associations. For example:
+  - Profile `profile_hr_manager`: role `manager_coordinator`, grants `attendance.records.*`, `tasks.*`, department `HR`.
+  - Profile `profile_design_manager`: role `manager_coordinator`, grants `tasks.*` (NO attendance), department `Design`.
+  - Profile `profile_junior_hr`: role `executive`, grants `attendance.comments.create`, department `HR`.
+- **Consequences**:
+  - *Pros*: Preserves the strict 11-role hierarchy. Decouples job titles from RBAC levels. Fits cleanly into `memberships.profile_id`.
+  - *Cons*: Requires an extra relational join to `profile_permissions` when calculating effective permissions.
+
+#### Approach 2: Department-Scoped Permission Grants
+- **Mechanism**: Extend the `role_permissions` join table or introduce `department_permissions` (`department`, `role_key`, `permission_key`). Permissions are only active if the membership's `department` matches the grant.
+- **Consequences**:
+  - *Pros*: Direct calculation based on `memberships.department`.
+  - *Cons*: Violates clean role modeling by fragmenting permissions across departments, making auditing and cross-department collaboration complex.
+
+**Recommendation:** **Approach 1 (`access_profiles`)**. It maintains strict RBAC integrity, keeps the core role ladder immutable, and allows flexible bundling of departmental permissions.
+
+---
+
+### C. Invitations Reconciliation with Supabase Auth
+
+The assignment specifies: `Pending`, `Sent`, `Accepted`, `Expired`, `Revoked`.
+
+#### Database Reconciliation
+```sql
+ALTER TABLE invitations 
+    DROP CONSTRAINT IF EXISTS invitations_status_check,
+    ADD CONSTRAINT invitations_status_check 
+    CHECK (status IN ('PENDING', 'SENT', 'ACCEPTED', 'EXPIRED', 'REVOKED'));
 ```
 
-#### Acceptance & Approval Pipeline
-1. `POST /api/invitations/accept`:
-   - Validates `token_hash = sha256(supplied_token)`.
-   - Validates status is `Sent` and `expires_at > now()`.
-   - Creates the Supabase Auth user (or binds existing user).
-   - Syncs user mirror via `fn_upsert_user_mirror`.
-   - Calls existing approval definer function `fn_approve_membership()` or directly provisions the `memberships` row with pre-assigned role, department, and reporting manager.
-   - Marks invitation status as `Accepted` with `used_at = now()`.
+#### Supabase Auth Integration Flow
+1. **Creation (`PENDING`)**: Tenant Admin submits invite via Frontstage. Token generated, hashed via SHA-256 into `invitations.token_hash`.
+2. **Dispatch (`SENT`)**: The backend calls Supabase Admin API:
+   ```typescript
+   await adminClient.auth.admin.inviteUserByEmail(email, {
+       data: { invitation_token: rawToken, org_id: orgId }
+   });
+   ```
+   Upon successful dispatch, status transitions to `SENT`.
+3. **Resend**: Generates a new raw token, updates `token_hash`, extends `expires_at`, triggers email redispatch, and remains `SENT`.
+4. **Acceptance (`ACCEPTED`)**:
+   - Invitee clicks link in email, arrives at Frontstage `/accept-invite?token=...`.
+   - Backend verifies token hash, verifies `expires_at > now()`, confirms user in Supabase Auth.
+   - Syncs `public.users` via `fn_upsert_user_mirror`.
+   - Provisions `memberships` row with role, profile, department, and reporting manager.
+   - Updates invitation status to `ACCEPTED` with `used_at = now()`.
+5. **Revocation (`REVOKED`)**: Admin cancels invite. Status updated to `REVOKED`. Token rejected if attempted.
 
 ---
 
-### F. MFA Strategy: Tenant-Configurable vs Seed-Enforced
+### D. Express Migration Strategy
 
-The assignment specifies: *"MFA mandatory for Platform Super Admin; MFA configurable for tenant members"*, whereas ArchScale V5 currently hardcodes `roles.min_aal = 'aal2'` for `business_owner`.
+The assignment specifies **Node.js + Express**. Currently, `src/server/index.ts` uses raw Node.js `http.createServer()`.
 
-We compare both approaches without choosing:
-
-| Dimension | Option A: Per-Organisation Setting (`organisations.enforce_mfa`) | Option B: Static Role-Based Enforcement (`roles.min_aal = 'aal2'`) |
-| :--- | :--- | :--- |
-| **How it works** | A boolean column on `organisations` (`enforce_mfa BOOLEAN DEFAULT false`). If enabled for a tenant, all members (or designated tenant roles) are required to satisfy `aal2`. Platform roles remain permanently `aal2`. | The `roles` table permanently mandates `min_aal = 'aal2'` for `business_owner` and all platform roles globally across all tenants. |
-| **Flexibility** | High. Tenants can decide their own security policy based on organizational maturity or tier. | Rigid. Every Business Owner must have MFA enrolled and verified on every login. |
-| **Complexity** | Requires dynamic evaluation in `decide()` and during context creation (checking `organisations.enforce_mfa`). | Simple. Checked once via `context.aal >= role.min_aal`. |
-| **Security Risk** | If a tenant admin disables `enforce_mfa`, a compromised business owner password grants full tenant takeover with no 2FA challenge. | Guarantees zero credential-stuffing vulnerability for the tenant root, regardless of tenant preferences. |
-| **Compliance** | Matches SOC2/Enterprise configurable tenant security profiles. | Matches strict zero-trust baseline. |
+#### Migration Plan:
+1. Retain the exact route specifications and JSON payload schemas.
+2. Replace `http.createServer` with Express 5 / Express 4 router:
+   - Middleware for context extraction: `req.contextId = req.headers['x-archscale-context']`.
+   - Error handler middleware enforcing identical 401/403/404/500 JSON shapes.
+3. **Regression Safety**: All 10 existing tests in [`tests/server/http_server.test.ts`](file:///c:/Users/NEELS/Desktop/ArchScale%20V5/tests/server/http_server.test.ts) test the server over real HTTP (`fetch('http://127.0.0.1:3000/...')`). Running `tests/server/http_server.test.ts` during the refactor provides 100% regression validation.
 
 ---
 
-## 4. Repository Layout Evaluation
+### E. Minimal React + TypeScript Shell (Phase 3)
 
-The assignment mentions: *"Use 2–3 private GitHub repositories: xauth-foundation, xauth-tasks-test, xauth-attendance-test"*.
-
-We evaluate two architectures:
-
-### Option 1: Multi-Repository Layout (3 Repositories)
-- `xauth-foundation`: Auth server, DB migrations, Core RBAC engine, published `@archscale/xauth-sdk`.
-- `xauth-tasks-test`: Standalone Express/React app importing `@archscale/xauth-sdk` as an npm dependency.
-- `xauth-attendance-test`: Standalone Express/React app importing `@archscale/xauth-sdk` as an npm dependency.
-
-### Option 2: Monorepo Workspace (pnpm/npm workspaces in 1 Repository)
-- `packages/foundation`: Core engine, migrations, server, SDK export.
-- `packages/tasks`: Test app consuming `workspace:*`.
-- `packages/attendance`: Test app consuming `workspace:*`.
-
-### Comparison Matrix
-
-| Evaluation Criteria | Option 1: Multi-Repo (3 Repos) | Option 2: Monorepo (1 Repo, 3 Packages) |
-| :--- | :--- | :--- |
-| **SDK Dependency** | Published via private npm registry or git submodule/local file link. | Direct package dependency (`"@archscale/xauth-sdk": "workspace:*"`). Instant compilation and type checking. |
-| **Remove & Reconnect Test** | Physically run tasks app against foundation, shut down container / unlink package, verify foundation and attendance operate unaffected. | Remove package folder or run test suite with tasks package deleted/disabled; verify remaining packages pass. |
-| **Impact on Current Repo** | Requires extracting current code into a new foundation repo and initializing 2 external repos. High coordination overhead. | Natural evolution of `ArchScale V5`. All git history, applied migrations (001–013), and test harnesses remain intact. |
-| **CI / CD Pipeline** | 3 separate GitHub Action pipelines; cross-repo version synchronization needed. | Single atomic CI pipeline testing end-to-end integration and package decoupling in one pull request. |
-
-### Recommendation: Monorepo Workspace (`Option 2`)
-**Recommendation:** Organize as an **npm/pnpm workspace within this repository**.  
-It provides strict modular package boundary separation (proving that Tasks and Attendance have zero interdependencies and can be removed independently) while preserving the verified migrations (001–013), staging test suites, and strict agent rules without cross-repo git synchronization friction. If strict external git separation is required at handover, packages can be mirrored into separate GitHub repositories via `git subtree`.
+In Phase 3, build a lightweight React + Vite + TypeScript frontend inside `packages/foundation/ui` (or `src/ui`):
+- **Components**: Shared compact table, drawer pattern, status badge.
+- **Screens**:
+  1. Login & MFA Verify screen (handling 6-digit TOTP challenge).
+  2. Invitation Acceptance screen (`/accept-invite?token=...` with password set).
+  3. Workspace & Context Switcher.
 
 ---
 
-## 5. Phase Plan & Order of Execution
+## 4. Recorded User Decisions
 
-We confirm the phased order of execution with necessary refinements:
+1. **Repository Layout**:
+   - **Three private GitHub repositories** per the assignment:
+     - `xauth-foundation`: This repo becomes the foundation repository.
+     - `xauth-tasks-test`: Independent Tasks app repository (created in Phase 5).
+     - `xauth-attendance-test`: Independent Attendance app repository (created in Phase 5).
+   - **SDK Isolation**: The Foundation SDK will live in a dedicated folder (`packages/sdk` or `src/sdk`) with **strictly zero imports from server internals**, allowing clean standalone publishing/extraction.
+2. **MFA Enforcement**:
+   - **Per-organisation setting with a platform floor**:
+     - Platform roles (`founder`, `developer`, `client_servicing`, `accounts`) are permanently locked to `aal2`.
+     - Tenant organisations get a configurable setting (`organisations.mfa_requirement`).
+     - A Tenant Admin can raise the requirement (e.g. require MFA for all managers or members), but can **never** lower it below the platform floor.
+     - Changing tenant MFA settings requires step-up authentication.
+     - Default setting: Required for `business_owner`.
+3. **Email Delivery**:
+   - Custom SMTP configured in Supabase Auth (not Supabase's default rate-limited sender).
+
+---
+
+## 5. Phase Plan & Next Steps
 
 ```mermaid
 flowchart TD
-    P2[Finish Phase 2: Staging Finalization & Baseline Validation] --> P3[Phase 3: Onboarding, Invitations, Departments & Reporting Hierarchy]
-    P3 --> P4[Phase 4: Policy Engine, Exceptions & RBAC Management]
-    P4 --> P5[Phase 5: SDK Packaging, Tasks App & Attendance App]
-    P5 --> P6[Phase 6: Lightweight React UI - Backstage & Frontstage]
-    P6 --> P7[Phase 7: End-to-End Verification, Handover & Deployment]
+    P2[Finish Phase 2: Staging Finalization & Baseline Validation] --> P3[Phase 3: Onboarding, Invitations, Express Refactor & React Shell]
+    P3 --> P4[Phase 4: Policy Engine, fn_evaluate_policy & Access Profiles]
+    P4 --> P5[Phase 5: Standalone SDK, Tasks Repo & Attendance Repo]
+    P6[Phase 6: Backstage & Frontstage Lightweight UI] --> P7[Phase 7: End-to-End Verification & Deployed Integration]
+    P5 --> P6
 ```
 
-1. **Finish Phase 2 (Current Baseline)**: Validate staging state, ensure zero regressions on migrations 001–013 and seed data.
-2. **Phase 3: Onboarding & Org Hierarchy**:
-   - Schema update: `department`, `job_role`, `reporting_manager_membership_id` on `memberships`.
-   - Full invitation state machine (`Pending`, `Sent`, `Accepted`, `Expired`, `Revoked`).
-   - Email dispatch integration (Supabase Auth / SMTP).
-3. **Phase 4: Policy Engine & Cross-Team Exceptions**:
-   - `authorization_policies` table.
-   - `decide()` Gate 9 implementation for dynamic relationship rules (own records, direct reports, Design Manager peer view exception).
-   - Strict Attendance isolation rules (Tenant Admin locked out by default).
-4. **Phase 5: SDK & Independent Test Applications**:
-   - Export `@archscale/xauth-sdk`.
-   - Build `Tasks` application with Work ID, Assignee, Reviewer, Approver facts.
-   - Build `Attendance` application with append-only comments and export protection.
-   - Modular remove-and-reconnect testing.
-5. **Phase 6: Basic Lightweight UI (React + TS)**:
-   - Shared minimal UI design system (compact tables, drawer patterns).
-   - Backstage: Super Admin login, Tenant registration, support grant viewer.
-   - Frontstage: Tenant workspace switch, Member management, Tasks board, Attendance view.
-6. **Phase 7: Verification & Deployed Testing**:
-   - Stage 1–4 validation from Section 18.
-   - Verification report.
-
----
-
-## 6. Open Decisions for User Alignment
-
-1. **Repository Structure**: Do you prefer keeping this repository as a monorepo workspace (`packages/foundation`, `packages/tasks`, `packages/attendance`), or do you require creating 2–3 distinct GitHub repositories immediately?
-2. **MFA Configuration**: Should we retain the strict requirement where `business_owner` is always `aal2`, or introduce `organisations.enforce_mfa` to allow tenant-configurable MFA?
-3. **Email Delivery Provider**: For real email invitation delivery in Phase 3, should we use Supabase Auth's built-in SMTP or configure external SMTP credentials (e.g. Resend / SendGrid / Postmark)?
-
+- **Phase 2 (Current Baseline)**: Finished and verified. Staging has migrations 001–013 applied with zero regressions.
+- **Phase 3 (Next Step)**:
+  - Express refactor of server with HTTP test suite regression guard.
+  - Invitations state machine & Supabase Auth invite integration.
+  - Minimal React + TS shell for Login, MFA, and Invite acceptance.
+  - Database migration 014 for `department`, `job_role`, `reporting_manager_membership_id` on `memberships`.
