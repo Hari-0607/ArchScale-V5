@@ -222,6 +222,9 @@ describe('Invitations Engine API Integration Tests', () => {
                 'X-ArchScale-Context': ownerContextId
             }
         });
+        if (res.status !== 200) {
+            console.error('Test 4 failed with status:', res.status, await res.text());
+        }
         expect(res.status).toBe(200);
         const data = await res.json();
         expect(data.invitations).toBeInstanceOf(Array);
@@ -692,11 +695,11 @@ describe('Invitations Engine API Integration Tests', () => {
         const sent = getSentMails();
         const rawToken = sent[sent.length - 1].rawToken;
 
-        // Set subscription_seats for executive to limit 0
+        // Set organisation_seats for executive on licensed core_app to limit 0
         await adminPool.query(`
-            INSERT INTO public.subscription_seats (organisation_id, role_key, seat_limit, allocated_seats)
-            VALUES ($1, 'executive', 0, 0)
-            ON CONFLICT (organisation_id, role_key) DO UPDATE SET seat_limit = 0, allocated_seats = 0;
+            INSERT INTO public.organisation_seats (organisation_id, app_key, role_key, seat_limit, allocated_seats)
+            VALUES ($1, 'core_app', 'executive', 0, 0)
+            ON CONFLICT (organisation_id, app_key, role_key) DO UPDATE SET seat_limit = 0, allocated_seats = 0;
         `, [ORG_ID]);
 
         // Attempt to accept

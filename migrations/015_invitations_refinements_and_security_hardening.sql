@@ -10,6 +10,11 @@ ALTER TABLE public.invitations
     ADD COLUMN IF NOT EXISTS invitation_expires_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS membership_expires_at TIMESTAMPTZ;
 
+-- Drop NOT NULL on legacy expires_at column
+ALTER TABLE public.invitations
+    ALTER COLUMN expires_at DROP NOT NULL,
+    ALTER COLUMN expires_at SET DEFAULT (now() + interval '7 days');
+
 -- Migrate existing rows
 UPDATE public.invitations
 SET invitation_expires_at = COALESCE(expires_at, created_at + interval '7 days')
@@ -120,11 +125,11 @@ BEGIN
     END IF;
 
     -- B0.3: Automatically mark expired invitations in this organisation
-    UPDATE public.invitations
+    UPDATE public.invitations inv
     SET status = 'Expired'
-    WHERE organisation_id = v_org_id
-      AND status IN ('Pending', 'Sent')
-      AND public.invitations.invitation_expires_at <= now();
+    WHERE inv.organisation_id = v_org_id
+      AND inv.status IN ('Pending', 'Sent')
+      AND inv.invitation_expires_at <= now();
 
     RETURN QUERY
     SELECT 
