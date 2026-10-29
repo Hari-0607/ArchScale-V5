@@ -11,9 +11,10 @@
 --   2. invitations table upgraded:
 --      - Status enum: 'Pending', 'Sent', 'Accepted', 'Expired', 'Revoked' (single spelling)
 --      - target role, department, job_role, reporting_manager, access_profile_id
---      - invited_by_membership_id
+--      - invited_by_membership_id (replaces invited_by; used_at replaced by accepted_at)
 --      - UNIQUE index on (organisation_id, lower(email)) WHERE status IN ('Pending', 'Sent')
 --      - sent_at, accepted_at, revoked_at, resend_count
+--      - All direct runtime table access revoked; reads only through fn_list_org_invitations
 --   3. organisations:
 --      - member_min_aal ('aal1' | 'aal2', default 'aal2')
 --      - fn_set_organisation_mfa_requirement(p_min_aal) Security Definer function
@@ -25,10 +26,10 @@
 --        (restricted to caller's active organisation)
 --   5. Security Definer functions for listing members and invitations:
 --      - fn_list_org_members() (requires org.members.read)
---      - fn_list_org_invitations() (requires org.members.invite)
+--      - fn_list_org_invitations() (requires org.members.invite; never returns token_hash)
 --      - Support context permitted to read; write operations blocked
 --   6. auth_rate_limits:
---      - Direct DML revoked from runtime
+--      - Direct DML revoked from runtime; composite primary key (key, action)
 --      - fn_rate_limit_hit(key, action, max_attempts, window_seconds) Security Definer
 -- =============================================================================
 
@@ -204,7 +205,7 @@ CREATE TRIGGER trg_memberships_profile
     EXECUTE FUNCTION trg_fn_validate_membership_profile();
 
 -- -----------------------------------------------------------------------------
--- 4. Invitations Table Upgrades
+-- 4. Invitations Table Upgrades & Deduplication
 -- -----------------------------------------------------------------------------
 ALTER TABLE public.invitations
     ADD COLUMN IF NOT EXISTS invited_by_membership_id UUID REFERENCES public.memberships(id) ON DELETE SET NULL,
@@ -215,6 +216,39 @@ ALTER TABLE public.invitations
     ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS resend_count INT NOT NULL DEFAULT 0;
+
+-- Migrate used_at to accepted_at if used_at exists
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'invitations' AND column_name = 'used_at'
+    ) THEN
+        EXECUTE 'UPDATE public.invitations SET accepted_at = used_at WHERE accepted_at IS NULL AND used_at IS NOT NULL;';
+    END IF;
+END $$;
+
+-- Migrate invited_by (user_id) to invited_by_membership_id if invited_by exists
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'invitations' AND column_name = 'invited_by'
+    ) THEN
+        EXECUTE 'UPDATE public.invitations i
+                 SET invited_by_membership_id = m.id
+                 FROM public.memberships m
+                 WHERE i.invited_by_membership_id IS NULL
+                   AND i.invited_by IS NOT NULL
+                   AND m.user_id = i.invited_by
+                   AND m.organisation_id = i.organisation_id;';
+    END IF;
+END $$;
+
+-- Drop redundant duplicate columns (invited_by and used_at)
+ALTER TABLE public.invitations
+    DROP COLUMN IF EXISTS invited_by,
+    DROP COLUMN IF EXISTS used_at;
 
 -- Migrate existing uppercase rows
 UPDATE public.invitations
@@ -404,16 +438,10 @@ CREATE POLICY memberships_runtime_policy ON public.memberships
         AND organisation_id = fn_current_context_org_id()
     );
 
--- Direct SELECT on invitations: user sees ONLY invitations for their email
+-- Invitations: revoke all direct runtime access; no runtime SELECT policy exists
 DROP POLICY IF EXISTS invitations_context_read_policy ON public.invitations;
 DROP POLICY IF EXISTS invitations_runtime_policy ON public.invitations;
-CREATE POLICY invitations_runtime_policy ON public.invitations
-    FOR SELECT TO archscale_app_runtime
-    USING (
-        is_context_valid()
-        AND lower(email) = (SELECT lower(u.email) FROM public.users u WHERE u.id = fn_current_context_user_id())
-        AND organisation_id = fn_current_context_org_id()
-    );
+REVOKE ALL ON public.invitations FROM PUBLIC, archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
 -- 8. Definer Functions for Listing Org Members and Invitations
@@ -541,6 +569,13 @@ ALTER TABLE public.auth_rate_limits
     ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'signin',
     ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS reset_at TIMESTAMPTZ DEFAULT (now() + interval '15 minutes');
+
+-- Deduplicate any collisions before creating composite primary key (key, action)
+DELETE FROM public.auth_rate_limits a
+USING public.auth_rate_limits b
+WHERE a.ctid < b.ctid
+  AND a.key = b.key
+  AND COALESCE(a.action, 'signin') = COALESCE(b.action, 'signin');
 
 -- Ensure primary key is (key, action)
 DO $$
