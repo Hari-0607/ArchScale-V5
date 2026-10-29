@@ -144,7 +144,17 @@ export const App: React.FC = () => {
   }
 
   // ── Main app shell ─────────────────────────────────────────────────────────
-  const navItems = isBackstage ? BACKSTAGE_NAV : FRONTSTAGE_NAV;
+  // Derive persona role+dept from context (DB lookup) → demoPersona → principal
+  const personaRole = context?.roleKey ?? session.demoPersona?.role ?? session.principal.role;
+  const personaDept = context?.roleKey ? undefined : (session.demoPersona?.dept ?? (session.principal as any).department);
+  const showAttendance = personaRole === 'founder' || personaDept === 'HR' || personaRole === 'founder';
+
+  const navItems = isBackstage ? BACKSTAGE_NAV : [
+    { key: 'team',        label: 'Team',         icon: '👥' },
+    { key: 'tasks',       label: 'Tasks',        icon: '✓' },
+    { key: 'attendance',  label: 'Attendance',   icon: '📅', hidden: !showAttendance },
+    { key: 'invitations', label: 'Invitations',  icon: '✉' },
+  ];
 
   return (
     <SessionContext.Provider value={{ session, context, setSession, setContext }}>
@@ -155,7 +165,7 @@ export const App: React.FC = () => {
           active={activeNav}
           onChange={setActiveNav}
           title={isBackstage ? 'ArchScale Platform' : (context?.organisationName ?? 'ArchScale')}
-          subtitle={isBackstage ? 'Backstage' : (context?.workspaceName ?? undefined)}
+          subtitle={isBackstage ? 'Backstage' : (context?.workspaceName ?? (session.demoPersona?.dept ?? undefined))}
           collapsed={sidebarCollapsed}
           onCollapse={() => setSidebarCollapsed(c => !c)}
         />
