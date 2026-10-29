@@ -289,7 +289,8 @@ VALUES
 ON CONFLICT (key) DO UPDATE SET min_aal = EXCLUDED.min_aal;
 
 INSERT INTO public.role_permissions (role_key, permission_key)
-VALUES 
+SELECT v.role_key, v.perm_key
+FROM (VALUES
     ('business_owner', 'org.settings.manage'),
     ('business_owner', 'org.members.manage'),
     ('founder', 'platform.support.read'),
@@ -297,7 +298,10 @@ VALUES
     ('founder', 'platform.organisations.manage'),
     ('client_servicing', 'platform.support.read'),
     ('client_servicing', 'platform.support.manage')
-ON CONFLICT (role_key, permission_key) DO NOTHING;
+) AS v(role_key, perm_key)
+JOIN public.roles r ON r.key = v.role_key
+JOIN public.permissions p ON p.key = v.perm_key
+ON CONFLICT DO NOTHING;
 
 -- -----------------------------------------------------------------------------
 -- 6. Effective Permissions Calculation (Roles + Access Profiles)

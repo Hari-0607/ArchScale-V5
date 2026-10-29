@@ -725,12 +725,10 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
     it('13. F4: Support context without platform.support.read is denied in fn_list_org_members and fn_list_org_invitations', async () => {
         // Create an untrusted staff user without platform.support.read permission
         const UNTRUSTED_STAFF_ID = '30000000-0000-0000-0000-000000000099';
-        await adminPool.query(`
-            INSERT INTO auth.users (id, email) VALUES ($1, 'untrusted@platform.test') ON CONFLICT DO NOTHING;
-            INSERT INTO public.users (id, user_code, email) VALUES ($1, 'AS-UNTRUST', 'untrusted@platform.test') ON CONFLICT DO NOTHING;
-            INSERT INTO public.memberships (organisation_id, user_id, role_key, status)
-            VALUES ('00000000-0000-0000-0000-000000000001', $1, 'developer', 'ACTIVE') ON CONFLICT DO NOTHING;
-        `, [UNTRUSTED_STAFF_ID]);
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, 'untrusted@platform.test') ON CONFLICT DO NOTHING;`, [UNTRUSTED_STAFF_ID]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, 'AS-UNTRUST', 'untrusted@platform.test') ON CONFLICT DO NOTHING;`, [UNTRUSTED_STAFF_ID]);
+        await adminPool.query(`INSERT INTO public.memberships (organisation_id, user_id, role_key, status)
+            VALUES ('00000000-0000-0000-0000-000000000001', $1, 'developer', 'ACTIVE') ON CONFLICT DO NOTHING;`, [UNTRUSTED_STAFF_ID]);
 
         // Create support grant with untrusted staff membership
         const devMemRes = await adminPool.query(`SELECT id FROM public.memberships WHERE user_id = $1;`, [UNTRUSTED_STAFF_ID]);
@@ -877,10 +875,8 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
 
         // 4. Accept invitation by invitee user
         const INVITEE_USER_ID = '30000000-0000-0000-0000-000000000077';
-        await adminPool.query(`
-            INSERT INTO auth.users (id, email) VALUES ($1, 'invitee.one@studio.test') ON CONFLICT DO NOTHING;
-            INSERT INTO public.users (id, user_code, email) VALUES ($1, 'AS-INV01', 'invitee.one@studio.test') ON CONFLICT DO NOTHING;
-        `, [INVITEE_USER_ID]);
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, 'invitee.one@studio.test') ON CONFLICT DO NOTHING;`, [INVITEE_USER_ID]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, 'AS-INV01', 'invitee.one@studio.test') ON CONFLICT DO NOTHING;`, [INVITEE_USER_ID]);
 
         // Wrong token rejected
         await expect(adminPool.query(`SELECT fn_accept_invitation('wrong-token', $1::uuid);`, [INVITEE_USER_ID]))
