@@ -220,10 +220,8 @@ BEGIN
     WHERE ac.id = p_context_id;
 
     -- 2. Reject support contexts (support contexts are strictly read-only)
-    IF v_support_grant_id IS NOT NULL THEN
-        RAISE EXCEPTION 'AUTH_SUPPORT_READONLY: fn_assert_not_support_context rejected mutation'
-            USING ERRCODE = 'P0001';
-    END IF;
+    PERFORM set_config('archscale.current_context_id', p_context_id::text, true);
+    PERFORM fn_assert_not_support_context();
 
     -- 3. Only business_owner at AAL2 may alter tenant MFA settings
     IF v_role_key <> 'business_owner' THEN
