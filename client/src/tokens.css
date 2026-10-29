@@ -1,0 +1,86 @@
+:root {
+  /* Colors */
+  --color-bg: #f8f9fa;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f3f5;
+  --color-border: #dee2e6;
+  --color-border-focus: #2563eb;
+  --color-text: #212529;
+  --color-text-muted: #6c757d;
+  --color-text-subtle: #adb5bd;
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-light: #eff6ff;
+  --color-success: #059669;
+  --color-success-bg: #ecfdf5;
+  --color-warning: #d97706;
+  --color-warning-bg: #fffbeb;
+  --color-error: #dc2626;
+  --color-error-bg: #fef2f2;
+  --color-sidebar-bg: #1e293b;
+  --color-sidebar-text: #cbd5e1;
+  --color-sidebar-hover: #334155;
+  --color-sidebar-active: #2563eb;
+  --color-sidebar-active-bg: rgba(37,99,235,0.18);
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* Radii */
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Typography */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-body: 13px;
+  --font-size-md: 14px;
+  --font-size-h3: 15px;
+  --font-size-h2: 16px;
+  --font-size-h1: 20px;
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  /* Compact density */
+  --row-height: 36px;
+  --input-height: 32px;
+  --btn-height: 32px;
+
+  /* Layout */
+  --sidebar-width: 220px;
+  --topbar-height: 52px;
+  --content-max: 1200px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.12);
+  --shadow-drawer: -4px 0 24px rgba(0,0,0,0.15);
+
+  --transition: 150ms ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0f172a;
+    --color-surface: #1e293b;
+    --color-surface-2: #263348;
+    --color-border: #334155;
+    --color-text: #f1f5f9;
+    --color-text-muted: #94a3b8;
+    --color-text-subtle: #64748b;
+    --color-accent-light: rgba(37,99,235,0.15);
+    --color-success-bg: rgba(5,150,105,0.15);
+    --color-warning-bg: rgba(217,119,6,0.15);
+    --color-error-bg: rgba(220,38,38,0.15);
+    --color-sidebar-bg: #0f172a;
+    --color-sidebar-hover: #1e293b;
+  }
+}
