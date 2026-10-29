@@ -445,9 +445,9 @@ BEGIN
 
     v_org_id := fn_current_context_org_id();
 
-    SELECT (support_grant_id IS NOT NULL) INTO v_is_support
-    FROM public.access_contexts
-    WHERE id = v_context_id;
+    SELECT (ac.support_grant_id IS NOT NULL) INTO v_is_support
+    FROM public.access_contexts ac
+    WHERE ac.id = v_context_id;
 
     IF NOT COALESCE(v_is_support, false) THEN
         v_perms := fn_get_effective_permissions();
@@ -503,9 +503,9 @@ BEGIN
 
     v_org_id := fn_current_context_org_id();
 
-    SELECT (support_grant_id IS NOT NULL) INTO v_is_support
-    FROM public.access_contexts
-    WHERE id = v_context_id;
+    SELECT (ac.support_grant_id IS NOT NULL) INTO v_is_support
+    FROM public.access_contexts ac
+    WHERE ac.id = v_context_id;
 
     IF NOT COALESCE(v_is_support, false) THEN
         v_perms := fn_get_effective_permissions();

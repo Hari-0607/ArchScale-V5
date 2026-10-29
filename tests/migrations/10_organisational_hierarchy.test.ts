@@ -17,7 +17,7 @@
  *      - 'aal1' or 'aal2', DEFAULT 'aal2'
  *      - Effective minimum = max(roles.min_aal, organisations.member_min_aal)
  *      - aal2 roles can never be lowered by org setting (org at aal1 never lowers business_owner)
- *      - intern in org set to aal2 is denied at aal1
+ *      - member in org set to aal2 is denied at aal1
  *      - only business_owner at aal2 can change it via fn_set_organisation_mfa_requirement (parameterless context)
  *   4. access_profiles:
  *      - Can attach to ANY subscriber role via role_key
@@ -52,7 +52,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let adminPool: pg.Pool;
-let runtimeClient: pg.Client;
+let runtimePool: pg.Pool;
 
 const USER_OWNER_ID   = '30000000-0000-0000-0000-000000000001';
 const USER_MGR_ID     = '30000000-0000-0000-0000-000000000002';
@@ -190,16 +190,15 @@ beforeAll(async () => {
     `, [staffMembershipId, ORG_A_ID]);
     supportGrantId = grantRes.rows[0].id;
 
-    // Runtime Client setup connected to the isolated test database
-    runtimeClient = new pg.Client({
+    // Runtime Pool setup connected to the isolated test database
+    runtimePool = new pg.Pool({
         ...RUNTIME_CONFIG,
         database: 'archscale_test_014'
     });
-    await runtimeClient.connect();
 });
 
 afterAll(async () => {
-    if (runtimeClient) await runtimeClient.end().catch(() => {});
+    if (runtimePool) await runtimePool.end().catch(() => {});
     if (adminPool) await adminPool.end().catch(() => {});
 });
 
@@ -300,91 +299,90 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `);
         expect(freshOrgRes.rows[0].member_min_aal).toBe('aal2');
 
-        // Test leader (role.min_aal = 'aal1', has org.members.read) in an org set to aal2:
-        const leaderAal1CtxRes = await adminPool.query(`
-            SELECT fn_create_access_context($1::uuid, 'sess_leader_aal1', $2::uuid, $3::uuid, 'aal1');
-        `, [USER_LEADER_ID, ORG_A_ID, workspaceAId]);
-        const leaderAal1CtxId = leaderAal1CtxRes.rows[0].fn_create_access_context;
-
-        const leaderPrincipalAal1: VerifiedPrincipal = {
-            id: USER_LEADER_ID,
-            email: 'leader@studio.test',
-            sessionId: 'sess_leader_aal1',
-            aal: 'aal1',
-            issuer: 'test',
-            audience: 'test',
-            expiresAt: Math.floor(Date.now() / 1000) + 3600
-        };
-
-        // Even though leader role.min_aal is aal1, org member_min_aal is aal2 -> decide() denies with AUTH_AAL
-        const leaderDecision = await decide(runtimeClient as any, leaderPrincipalAal1, leaderAal1CtxId, 'org.members.read');
-        expect(leaderDecision.allow).toBe(false);
-        if (!leaderDecision.allow) {
-            expect(leaderDecision.gateFailed).toBe(8);
-            expect(leaderDecision.reasonCode).toBe('AUTH_AAL');
-        }
-
-        // Leader at aal2 in aal2 org is allowed
-        const leaderAal2CtxRes = await adminPool.query(`
-            SELECT fn_create_access_context($1::uuid, 'sess_leader_aal2', $2::uuid, $3::uuid, 'aal2');
-        `, [USER_LEADER_ID, ORG_A_ID, workspaceAId]);
-        const leaderAal2CtxId = leaderAal2CtxRes.rows[0].fn_create_access_context;
-        const leaderPrincipalAal2: VerifiedPrincipal = {
-            ...leaderPrincipalAal1,
-            sessionId: 'sess_leader_aal2',
-            aal: 'aal2'
-        };
-        const leaderDecisionAal2 = await decide(runtimeClient as any, leaderPrincipalAal2, leaderAal2CtxId, 'org.members.read');
-        expect(leaderDecisionAal2.allow).toBe(true);
-
-        // Setting org to aal1 by business_owner at aal2:
-        const ownerAal2CtxRes = await adminPool.query(`
-            SELECT fn_create_access_context($1::uuid, 'sess_owner_mfa', $2::uuid, $3::uuid, 'aal2');
-        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
-        const ownerAal2CtxId = ownerAal2CtxRes.rows[0].fn_create_access_context;
-
-        // Set context via fn_set_app_context on a dedicated client session
-        const client = await adminPool.connect();
+        const adminClient = await adminPool.connect();
         try {
-            await client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerAal2CtxId, USER_OWNER_ID, 'sess_owner_mfa']);
-            await client.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`);
+            // Test leader (role.min_aal = 'aal1', has org.members.read) in an org set to aal2:
+            const leaderAal1CtxRes = await adminClient.query(`
+                SELECT fn_create_access_context($1::uuid, 'sess_leader_aal1', $2::uuid, $3::uuid, 'aal1');
+            `, [USER_LEADER_ID, ORG_A_ID, workspaceAId]);
+            const leaderAal1CtxId = leaderAal1CtxRes.rows[0].fn_create_access_context;
+
+            const leaderPrincipalAal1: VerifiedPrincipal = {
+                id: USER_LEADER_ID,
+                email: 'leader@studio.test',
+                sessionId: 'sess_leader_aal1',
+                aal: 'aal1',
+                issuer: 'test',
+                audience: 'test',
+                expiresAt: Math.floor(Date.now() / 1000) + 3600
+            };
+
+            // Even though leader role.min_aal is aal1, org member_min_aal is aal2 -> decide() denies with AUTH_AAL
+            const leaderDecision = await decide(adminClient, leaderPrincipalAal1, leaderAal1CtxId, 'org.members.read');
+            expect(leaderDecision.allow).toBe(false);
+            if (!leaderDecision.allow) {
+                expect(leaderDecision.gateFailed).toBe(8);
+                expect(leaderDecision.reasonCode).toBe('AUTH_AAL');
+            }
+
+            // Leader at aal2 in aal2 org is allowed
+            const leaderAal2CtxRes = await adminClient.query(`
+                SELECT fn_create_access_context($1::uuid, 'sess_leader_aal2', $2::uuid, $3::uuid, 'aal2');
+            `, [USER_LEADER_ID, ORG_A_ID, workspaceAId]);
+            const leaderAal2CtxId = leaderAal2CtxRes.rows[0].fn_create_access_context;
+            const leaderPrincipalAal2: VerifiedPrincipal = {
+                ...leaderPrincipalAal1,
+                sessionId: 'sess_leader_aal2',
+                aal: 'aal2'
+            };
+            const leaderDecisionAal2 = await decide(adminClient, leaderPrincipalAal2, leaderAal2CtxId, 'org.members.read');
+            expect(leaderDecisionAal2.allow).toBe(true);
+
+            // Setting org to aal1 by business_owner at aal2:
+            const ownerAal2CtxRes = await adminClient.query(`
+                SELECT fn_create_access_context($1::uuid, 'sess_owner_mfa', $2::uuid, $3::uuid, 'aal2');
+            `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
+            const ownerAal2CtxId = ownerAal2CtxRes.rows[0].fn_create_access_context;
+
+            // Set context via fn_set_app_context inside transaction
+            await adminClient.query('BEGIN;');
+            await adminClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerAal2CtxId, USER_OWNER_ID, 'sess_owner_mfa']);
+            await adminClient.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`);
+            await adminClient.query('COMMIT;');
+
+            const orgCheck = await adminClient.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [ORG_A_ID]);
+            expect(orgCheck.rows[0].member_min_aal).toBe('aal1');
+
+            // Verify: setting org to aal1 NEVER lowers business_owner (roles.min_aal = aal2)
+            const ownerAal1CtxRes = await adminClient.query(`
+                SELECT fn_create_access_context($1::uuid, 'sess_owner_aal1', $2::uuid, $3::uuid, 'aal1');
+            `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
+            const ownerAal1CtxId = ownerAal1CtxRes.rows[0].fn_create_access_context;
+
+            const ownerPrincipalAal1: VerifiedPrincipal = {
+                id: USER_OWNER_ID,
+                email: 'owner@studio.test',
+                sessionId: 'sess_owner_aal1',
+                aal: 'aal1',
+                issuer: 'test',
+                audience: 'test',
+                expiresAt: Math.floor(Date.now() / 1000) + 3600
+            };
+
+            const ownerDecision = await decide(adminClient, ownerPrincipalAal1, ownerAal1CtxId, 'org.members.invite');
+            expect(ownerDecision.allow).toBe(false);
+            if (!ownerDecision.allow) {
+                expect(ownerDecision.gateFailed).toBe(8);
+                expect(ownerDecision.reasonCode).toBe('AUTH_AAL');
+            }
+
+            // Restore org to aal2
+            await adminClient.query('BEGIN;');
+            await adminClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerAal2CtxId, USER_OWNER_ID, 'sess_owner_mfa']);
+            await adminClient.query(`SELECT fn_set_organisation_mfa_requirement('aal2');`);
+            await adminClient.query('COMMIT;');
         } finally {
-            client.release();
-        }
-
-        const orgCheck = await adminPool.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [ORG_A_ID]);
-        expect(orgCheck.rows[0].member_min_aal).toBe('aal1');
-
-        // Verify: setting org to aal1 NEVER lowers business_owner (roles.min_aal = aal2)
-        const ownerAal1CtxRes = await adminPool.query(`
-            SELECT fn_create_access_context($1::uuid, 'sess_owner_aal1', $2::uuid, $3::uuid, 'aal1');
-        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
-        const ownerAal1CtxId = ownerAal1CtxRes.rows[0].fn_create_access_context;
-
-        const ownerPrincipalAal1: VerifiedPrincipal = {
-            id: USER_OWNER_ID,
-            email: 'owner@studio.test',
-            sessionId: 'sess_owner_aal1',
-            aal: 'aal1',
-            issuer: 'test',
-            audience: 'test',
-            expiresAt: Math.floor(Date.now() / 1000) + 3600
-        };
-
-        const ownerDecision = await decide(runtimeClient as any, ownerPrincipalAal1, ownerAal1CtxId, 'org.members.invite');
-        expect(ownerDecision.allow).toBe(false);
-        if (!ownerDecision.allow) {
-            expect(ownerDecision.gateFailed).toBe(8);
-            expect(ownerDecision.reasonCode).toBe('AUTH_AAL');
-        }
-
-        // Restore org to aal2
-        const restoreClient = await adminPool.connect();
-        try {
-            await restoreClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerAal2CtxId, USER_OWNER_ID, 'sess_owner_mfa']);
-            await restoreClient.query(`SELECT fn_set_organisation_mfa_requirement('aal2');`);
-        } finally {
-            restoreClient.release();
+            adminClient.release();
         }
     });
 
@@ -426,7 +424,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
             UPDATE public.memberships SET profile_id = $1 WHERE id = $2;
         `, [execProfileId, execMembershipId]);
 
-        // Set context for exec on dedicated client
+        // Set context for exec on dedicated client inside transaction
         const execCtxRes = await adminPool.query(`
             SELECT fn_create_access_context($1::uuid, 'sess_exec_perms', $2::uuid, $3::uuid, 'aal2');
         `, [USER_EXEC_ID, ORG_A_ID, workspaceAId]);
@@ -434,6 +432,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
 
         const client = await adminPool.connect();
         try {
+            await client.query('BEGIN;');
             await client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [execCtxId, USER_EXEC_ID, 'sess_exec_perms']);
 
             // Query effective permissions parameterless
@@ -446,24 +445,18 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
             const otherOrgMem = await client.query(`SELECT id FROM public.memberships WHERE organisation_id = $1 LIMIT 1;`, [ORG_B_ID]);
             const crossOrgRes = await client.query(`SELECT fn_get_effective_permissions($1::uuid) AS perms;`, [otherOrgMem.rows[0].id]);
             expect(crossOrgRes.rows[0].perms).toEqual([]);
+            await client.query('COMMIT;');
         } finally {
             client.release();
         }
     });
 
     it('8. RLS: member sees only their own membership row and only their own invitations', async () => {
-        // Set context for intern on runtime client
+        // Set context for intern on runtime client inside transaction
         const internCtxRes = await adminPool.query(`
             SELECT fn_create_access_context($1::uuid, 'sess_intern_rls', $2::uuid, $3::uuid, 'aal2');
         `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
         const internCtxId = internCtxRes.rows[0].fn_create_access_context;
-
-        await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [internCtxId, USER_INTERN_ID, 'sess_intern_rls']);
-
-        // Direct SELECT on memberships returns ONLY intern's row
-        const memRows = await runtimeClient.query(`SELECT id, user_id FROM public.memberships;`);
-        expect(memRows.rowCount).toBe(1);
-        expect(memRows.rows[0].user_id).toBe(USER_INTERN_ID);
 
         // Add invitation for intern and invitation for someone else
         await adminPool.query(`
@@ -475,54 +468,86 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
             ON CONFLICT DO NOTHING;
         `, [ORG_A_ID, USER_OWNER_ID]);
 
-        // Direct SELECT on invitations returns ONLY invitations for intern's email
-        const invRows = await runtimeClient.query(`SELECT id, email FROM public.invitations;`);
-        expect(invRows.rowCount).toBe(1);
-        expect(invRows.rows[0].email).toBe('intern@studio.test');
+        const client = await runtimePool.connect();
+        try {
+            await client.query('BEGIN;');
+            await client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [internCtxId, USER_INTERN_ID, 'sess_intern_rls']);
+
+            // Direct SELECT on memberships returns ONLY intern's row
+            const memRows = await client.query(`SELECT id, user_id FROM public.memberships;`);
+            expect(memRows.rowCount).toBe(1);
+            expect(memRows.rows[0].user_id).toBe(USER_INTERN_ID);
+
+            // Direct SELECT on invitations returns ONLY invitations for intern's email
+            const invRows = await client.query(`SELECT id, email FROM public.invitations;`);
+            expect(invRows.rowCount).toBe(1);
+            expect(invRows.rows[0].email).toBe('intern@studio.test');
+
+            await client.query('COMMIT;');
+        } finally {
+            client.release();
+        }
     });
 
     it('9. definer listing functions: permission-gated (org.members.read / org.members.invite)', async () => {
-        // Helper to test listing under a specific user context
-        async function testListPermissions(userId: string, sessionId: string) {
+        // Helper to test listing under a specific user context within a transaction
+        async function runInUserContext<T>(userId: string, sessionId: string, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
             const ctxRes = await adminPool.query(`
                 SELECT fn_create_access_context($1::uuid, $2, $3::uuid, $4::uuid, 'aal2');
             `, [userId, sessionId, ORG_A_ID, workspaceAId]);
             const ctxId = ctxRes.rows[0].fn_create_access_context;
-            await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ctxId, userId, sessionId]);
+
+            const client = await runtimePool.connect();
+            try {
+                await client.query('BEGIN;');
+                await client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ctxId, userId, sessionId]);
+                const result = await fn(client);
+                await client.query('COMMIT;');
+                return result;
+            } catch (err) {
+                await client.query('ROLLBACK;').catch(() => {});
+                throw err;
+            } finally {
+                client.release();
+            }
         }
 
         // 1. Guest: denied for both listing functions
-        await testListPermissions(USER_GUEST_ID, 'sess_guest_list');
-        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_members();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
-        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runInUserContext(USER_GUEST_ID, 'sess_guest_list', c => c.query(`SELECT * FROM fn_list_org_members();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runInUserContext(USER_GUEST_ID, 'sess_guest_list2', c => c.query(`SELECT * FROM fn_list_org_invitations();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
 
         // 2. Collaborator: denied for both
-        await testListPermissions(USER_COLLAB_ID, 'sess_collab_list');
-        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_members();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
-        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runInUserContext(USER_COLLAB_ID, 'sess_collab_list', c => c.query(`SELECT * FROM fn_list_org_members();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runInUserContext(USER_COLLAB_ID, 'sess_collab_list2', c => c.query(`SELECT * FROM fn_list_org_invitations();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
 
         // 3. Intern: denied for both
-        await testListPermissions(USER_INTERN_ID, 'sess_intern_list');
-        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_members();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
-        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runInUserContext(USER_INTERN_ID, 'sess_intern_list', c => c.query(`SELECT * FROM fn_list_org_members();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runInUserContext(USER_INTERN_ID, 'sess_intern_list2', c => c.query(`SELECT * FROM fn_list_org_invitations();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
 
         // 4. Executive: denied for both
-        await testListPermissions(USER_EXEC_ID, 'sess_exec_list');
-        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_members();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
-        await expect(runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`)).rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runInUserContext(USER_EXEC_ID, 'sess_exec_list', c => c.query(`SELECT * FROM fn_list_org_members();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
+        await expect(runInUserContext(USER_EXEC_ID, 'sess_exec_list2', c => c.query(`SELECT * FROM fn_list_org_invitations();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
 
         // 5. Leader: allowed for both
-        await testListPermissions(USER_LEADER_ID, 'sess_leader_list');
-        const leaderMembers = await runtimeClient.query(`SELECT * FROM fn_list_org_members();`);
+        const leaderMembers = await runInUserContext(USER_LEADER_ID, 'sess_leader_list', c => c.query(`SELECT * FROM fn_list_org_members();`));
         expect(leaderMembers.rowCount).toBeGreaterThanOrEqual(5);
-        const leaderInvs = await runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`);
-        expect(leaderInvs.rowCount).toBeGreaterThanOrEqual(1);
+
+        // Leader does not have org.members.invite by default, so invite list is denied
+        await expect(runInUserContext(USER_LEADER_ID, 'sess_leader_list2', c => c.query(`SELECT * FROM fn_list_org_invitations();`)))
+            .rejects.toThrow(/AUTH_PERMISSION_DENIED/i);
 
         // 6. Business Owner: allowed for both
-        await testListPermissions(USER_OWNER_ID, 'sess_owner_list');
-        const ownerMembers = await runtimeClient.query(`SELECT * FROM fn_list_org_members();`);
+        const ownerMembers = await runInUserContext(USER_OWNER_ID, 'sess_owner_list', c => c.query(`SELECT * FROM fn_list_org_members();`));
         expect(ownerMembers.rowCount).toBeGreaterThanOrEqual(5);
-        const ownerInvs = await runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`);
+        const ownerInvs = await runInUserContext(USER_OWNER_ID, 'sess_owner_list2', c => c.query(`SELECT * FROM fn_list_org_invitations();`));
         expect(ownerInvs.rowCount).toBeGreaterThanOrEqual(1);
 
         // 7. Support context: allowed to read, denied on write
@@ -533,43 +558,55 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `, [USER_STAFF_ID, ORG_A_ID, workspaceAId, supportGrantId]);
         const supCtxId = supCtxRes.rows[0].fn_create_access_context;
 
-        await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [supCtxId, USER_STAFF_ID, 'sess_staff_list']);
-        const staffMembers = await runtimeClient.query(`SELECT * FROM fn_list_org_members();`);
-        expect(staffMembers.rowCount).toBeGreaterThanOrEqual(5);
-        const staffInvs = await runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`);
-        expect(staffInvs.rowCount).toBeGreaterThanOrEqual(1);
+        const supClient = await runtimePool.connect();
+        try {
+            await supClient.query('BEGIN;');
+            await supClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [supCtxId, USER_STAFF_ID, 'sess_staff_list']);
+            const staffMembers = await supClient.query(`SELECT * FROM fn_list_org_members();`);
+            expect(staffMembers.rowCount).toBeGreaterThanOrEqual(5);
+            const staffInvs = await supClient.query(`SELECT * FROM fn_list_org_invitations();`);
+            expect(staffInvs.rowCount).toBeGreaterThanOrEqual(1);
 
-        // Support context denied on mutations
-        await expect(runtimeClient.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`))
-            .rejects.toThrow(/support contexts are read-only|AUTH_SUPPORT_READ_ONLY/i);
+            // Support context denied on mutations
+            await expect(supClient.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`))
+                .rejects.toThrow(/support contexts are read-only|AUTH_SUPPORT_READ_ONLY/i);
+            await supClient.query('ROLLBACK;');
+        } finally {
+            supClient.release();
+        }
     });
 
     it('10. auth_rate_limits: runtime direct DML revoked; fn_rate_limit_hit atomic and enforces limit', async () => {
-        // Direct DML from runtime must fail
-        await expect(runtimeClient.query(`SELECT * FROM public.auth_rate_limits;`)).rejects.toThrow(/permission denied/i);
-        await expect(runtimeClient.query(`INSERT INTO public.auth_rate_limits (key, action) VALUES ('k', 'signin');`)).rejects.toThrow(/permission denied/i);
-        await expect(runtimeClient.query(`DELETE FROM public.auth_rate_limits;`)).rejects.toThrow(/permission denied/i);
+        const client = await runtimePool.connect();
+        try {
+            // Direct DML from runtime must fail
+            await expect(client.query(`SELECT * FROM public.auth_rate_limits;`)).rejects.toThrow(/permission denied/i);
+            await expect(client.query(`INSERT INTO public.auth_rate_limits (key, action) VALUES ('k', 'signin');`)).rejects.toThrow(/permission denied/i);
+            await expect(client.query(`DELETE FROM public.auth_rate_limits;`)).rejects.toThrow(/permission denied/i);
 
-        // Invalid action is rejected by definer function
-        await expect(runtimeClient.query(`SELECT fn_rate_limit_hit('ip:10.0.0.1', 'invalid_action', 5, 60);`))
-            .rejects.toThrow(/AUTH_RATE_LIMIT_INVALID_ACTION/i);
+            // Invalid action is rejected by definer function
+            await expect(client.query(`SELECT fn_rate_limit_hit('ip:10.0.0.1', 'invalid_action', 5, 60);`))
+                .rejects.toThrow(/AUTH_RATE_LIMIT_INVALID_ACTION/i);
 
-        // Single statement upsert respects max_attempts (5 attempts allowed, 6th denied)
-        const rateKey = 'ip:192.168.1.100';
-        for (let i = 1; i <= 5; i++) {
-            const hitRes = await runtimeClient.query<{ fn_rate_limit_hit: boolean }>(
+            // Single statement upsert respects max_attempts (5 attempts allowed, 6th denied)
+            const rateKey = 'ip:192.168.1.100';
+            for (let i = 1; i <= 5; i++) {
+                const hitRes = await client.query<{ fn_rate_limit_hit: boolean }>(
+                    `SELECT fn_rate_limit_hit($1, 'signin', 5, 60);`,
+                    [rateKey]
+                );
+                expect(hitRes.rows[0].fn_rate_limit_hit).toBe(true);
+            }
+
+            // 6th attempt: exceeded
+            const exceedRes = await client.query<{ fn_rate_limit_hit: boolean }>(
                 `SELECT fn_rate_limit_hit($1, 'signin', 5, 60);`,
                 [rateKey]
             );
-            expect(hitRes.rows[0].fn_rate_limit_hit).toBe(true);
+            expect(exceedRes.rows[0].fn_rate_limit_hit).toBe(false);
+        } finally {
+            client.release();
         }
-
-        // 6th attempt: exceeded
-        const exceedRes = await runtimeClient.query<{ fn_rate_limit_hit: boolean }>(
-            `SELECT fn_rate_limit_hit($1, 'signin', 5, 60);`,
-            [rateKey]
-        );
-        expect(exceedRes.rows[0].fn_rate_limit_hit).toBe(false);
 
         // Concurrent atomic test: 10 parallel hits with max_attempts = 4 on a new key
         const concurrentKey = 'ip:10.99.99.99';
