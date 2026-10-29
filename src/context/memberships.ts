@@ -1,4 +1,5 @@
 import { runtimePool } from '../db/index.js';
+import { PoolClient } from 'pg';
 
 export interface PrincipalMembership {
     membershipId: string;
@@ -23,7 +24,7 @@ export interface OrgWorkspace {
 export async function listPrincipalMemberships(userId: string, pool: any = runtimePool): Promise<PrincipalMembership[]> {
     if (!userId) return [];
 
-    const client = await pool.connect();
+    const client: PoolClient = await pool.connect();
     try {
         const res = await client.query<{
             membership_id: string;
@@ -61,7 +62,7 @@ export async function listOrgWorkspaces(
 ): Promise<OrgWorkspace[]> {
     if (!userId || !organisationId) return [];
 
-    const client = await pool.connect();
+    const client: PoolClient = await pool.connect();
     try {
         const res = await client.query<{
             workspace_id: string;

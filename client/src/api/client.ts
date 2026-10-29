@@ -1,65 +1,30 @@
-// API boundary — server responses are untyped at the wire level
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import { XAuthClient, ApiResult } from '../../../sdk/src/index.js';
 
-// Access token lives only in module memory — never written to localStorage/sessionStorage
+// Access tokens stay in memory. The same SDK contract can be consumed by the
+// independent Tasks and Attendance apps without copying authentication logic.
 let _token: string | null = null;
 let _contextId: string | null = null;
 let _demoPersona: { role: string; dept: string; memberId: string; title: string } | null = null;
+const xauth = new XAuthClient({
+  baseURL: import.meta.env.VITE_API_URL || '',
+  onUnauthorized: () => window.dispatchEvent(new Event('xauth:unauthorized')),
+});
 
-export function setToken(t: string | null): void { _token = t; }
-export function setContextId(c: string | null): void { _contextId = c; }
+export function setToken(t: string | null): void { _token = t; xauth.setAccessToken(t); }
+export function setRefreshToken(t: string | null): void { xauth.setRefreshToken(t); }
+export function setContextId(c: string | null): void { _contextId = c; xauth.setContext(c); }
+// Display-only test persona metadata. It is never sent to the API or used for authorization.
 export function setDemoPersona(p: typeof _demoPersona): void { _demoPersona = p; }
-export function getDemoPersona() { return _demoPersona; }
 export function getToken(): string | null { return _token; }
 export function getContextId(): string | null { return _contextId; }
 
-export type ApiResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; status: number; code: string; message: string };
-
-function buildHeaders(overrideToken?: string): HeadersInit {
-  const h: Record<string, string> = { 'Content-Type': 'application/json' };
-  const tok = overrideToken ?? _token;
-  if (tok) h['Authorization'] = `Bearer ${tok}`;
-  if (_contextId) h['X-ArchScale-Context'] = _contextId;
-  // Send demo persona so server can apply correct RBAC when DB context lacks role/dept
-  if (_demoPersona) {
-    h['X-Demo-Persona'] = btoa(JSON.stringify(_demoPersona));
-  }
-  return h;
-}
-
-function mapError(status: number, body: any): { code: string; message: string } {
-  if (status === 401) return { code: 'UNAUTHENTICATED', message: 'Your session has expired. Please sign in again.' };
-  if (status === 403) return { code: body?.code ?? 'FORBIDDEN', message: 'You do not have permission to do that.' };
-  if (status === 429) return { code: 'RATE_LIMITED', message: 'Too many attempts — please wait a moment and try again.' };
-  const code = body?.code ?? body?.error ?? String(status);
-  const message = body?.message ?? body?.error ?? `Request failed (${status})`;
-  return { code, message };
-}
-
-export async function api<T = any>(
+export async function api<T = unknown>(
   path: string,
   method = 'GET',
   body?: unknown,
   overrideToken?: string
 ): Promise<ApiResult<T>> {
-  try {
-    const res = await fetch(path, {
-      method,
-      headers: buildHeaders(overrideToken),
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    let data: any = {};
-    try { data = await res.json(); } catch { /* empty body is fine */ }
-    if (!res.ok) {
-      const { code, message } = mapError(res.status, data);
-      return { ok: false, status: res.status, code, message };
-    }
-    return { ok: true, data: data as T };
-  } catch (err: any) {
-    return { ok: false, status: 0, code: 'NETWORK_ERROR', message: 'Network error — check your connection and try again.' };
-  }
+  return xauth.request<T>(path, method, body, overrideToken);
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

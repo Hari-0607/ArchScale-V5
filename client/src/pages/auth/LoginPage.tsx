@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   quickLogin, signIn, signInByCode, verifyMfa,
-  setToken, setContextId, setDemoPersona,
+  setToken, setRefreshToken, setContextId, setDemoPersona,
 } from '../../api/client';
 import type { SessionData } from '../../hooks/useSession';
 import { Button } from '../../components/Button';
@@ -62,9 +62,9 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
   // Manual login
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  const [activeTab, setActiveTab] = useState<'quick' | 'manual'>('quick');
+  const [activeTab, setActiveTab] = useState<'quick' | 'manual'>('manual');
 
-  const finaliseSession = (data: { accessToken: string; principal: { id: string; email: string; aal: 'aal1'|'aal2'; role?: string; department?: string; jobRole?: string; personaKey?: string; memberId?: string; sessionId?: string }; mfaRequired?: boolean; demoPersona?: { key: string; role: string; dept: string; title: string; memberId: string } }) => {
+  const finaliseSession = (data: { accessToken: string; refreshToken?: string; principal: { id: string; email: string; aal: 'aal1'|'aal2'; role?: string; department?: string; jobRole?: string; personaKey?: string; memberId?: string; sessionId?: string }; mfaRequired?: boolean; demoPersona?: { key: string; role: string; dept: string; title: string; memberId: string } }) => {
     // Guard: accessToken must be present or we cannot proceed
     if (!data.accessToken) {
       setError('Sign in failed: no access token returned. Please try again.');
@@ -72,6 +72,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
     }
     const session: SessionData = {
       accessToken: data.accessToken,
+      refreshToken: data.refreshToken,
       principal: data.principal,
       mfaRequired: data.mfaRequired,
       demoPersona: data.demoPersona,
@@ -82,6 +83,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
     }
     // Always put the token in memory first — verifyMfa will use it via overrideToken
     setToken(data.accessToken);
+    setRefreshToken(data.refreshToken ?? null);
     // If MFA is required and not yet at aal2, show MFA screen
     if (data.mfaRequired && data.principal.aal !== 'aal2') {
       setMfaSession({ token: data.accessToken, email: data.principal.email });
@@ -137,9 +139,11 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
     const data = res.data as any;
     const session: SessionData = {
       accessToken: data.accessToken ?? mfaSession.token,
+      refreshToken: data.refreshToken,
       principal: { ...data.principal, aal: 'aal2' as const },
     };
     setToken(session.accessToken);
+    setRefreshToken(session.refreshToken ?? null);
     setContextId(null);
     onSuccess(session);
   };
@@ -200,7 +204,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px' }}>
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--color-border)', marginBottom: 28 }}>
-          {(['quick', 'manual'] as const).map(tab => (
+          {(['manual'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => { setActiveTab(tab); setError(null); }}

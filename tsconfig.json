@@ -11,6 +11,6 @@
     "outDir": "./dist",
     "rootDir": "./"
   },
-  "include": ["src/**/*", "auth-core/**/*", "tests/**/*", "scripts/**/*"],
+  "include": ["src/**/*", "sdk/**/*", "auth-core/**/*", "tests/**/*", "scripts/**/*"],
   "exclude": ["node_modules", "dist"]
 }

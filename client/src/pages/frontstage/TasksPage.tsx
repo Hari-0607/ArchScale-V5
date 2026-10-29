@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { getTasks, createTask, updateTask, approveTask } from '../../api/client';
+import { getTasks, createTask, updateTask, approveTask, getMembers } from '../../api/client';
 import { DataTable, Column } from '../../components/DataTable';
 import { PageHeader } from '../../components/PageHeader';
 import { Badge, statusVariant } from '../../components/Badge';
@@ -16,20 +16,6 @@ import { useSession } from '../../hooks/useSession';
 const PRIORITIES = ['Low', 'Normal', 'High', 'Urgent'];
 const STATUSES = ['To Do', 'In Progress', 'In Review', 'Completed'];
 
-const TEAM_MEMBERS = [
-  { id: 'lead-01', name: 'Design Manager 1 (Lead Architect)', dept: 'Design' },
-  { id: 'des-01',  name: 'Junior Designer 1 (Junior Architect)', dept: 'Design' },
-  { id: 'lead-02', name: 'Design Manager 2 (MEP Design Lead)', dept: 'Design' },
-  { id: 'des-02',  name: 'Junior Designer 2 (CAD Technician)', dept: 'Design' },
-  { id: 'lead-03', name: 'Design Manager 3 (Landscape Design Lead)', dept: 'Design' },
-  { id: 'des-03',  name: 'Junior Designer 3 (3D Visualizer)', dept: 'Design' },
-  { id: 'acc-01',  name: 'Accounts Manager (Finance Controller)', dept: 'Accounts' },
-  { id: 'acc-02',  name: 'Junior Accountant (Billing Specialist)', dept: 'Accounts' },
-  { id: 'hr-01',   name: 'HR Manager (People & Culture Lead)', dept: 'HR' },
-  { id: 'hr-02',   name: 'Junior HR (HR Coordinator)', dept: 'HR' },
-  { id: 'mem-01',  name: 'Tenant Admin (Studio Owner)', dept: 'Management' },
-];
-
 interface TaskForm {
   title: string;
   description: string;
@@ -44,27 +30,28 @@ interface TaskForm {
 const INITIAL: TaskForm = {
   title: '',
   description: '',
-  assignedToId: 'des-01',
+  assignedToId: '',
   department: 'Design',
-  reviewerId: 'lead-01',
+  reviewerId: '',
   startDate: '',
   dueDateTime: '',
   priority: 'Normal',
 };
 
 export const TasksPage: React.FC = () => {
-  const { session } = useSession();
+  const { session, context } = useSession();
   const { toasts, addToast, removeToast } = useToast();
   const [tasks, setTasks] = useState<any[]>([]);
+  const [members, setMembers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
 
   // RBAC resolution
-  const activeRole = session?.demoPersona?.role ?? session?.principal.role;
-  const activeDept = session?.demoPersona?.dept ?? (session?.principal as any)?.department;
-  const activeMemberId = session?.demoPersona?.memberId ?? session?.principal.id;
+  const activeRole = context?.roleKey ?? session?.demoPersona?.role ?? session?.principal.role;
+  const activeDept = context?.department ?? session?.demoPersona?.dept ?? session?.principal.department;
+  const activeMemberId = context?.membershipId ?? session?.demoPersona?.memberId ?? session?.principal.id;
 
   const isJunior = activeRole === 'intern';
   const isManager = activeRole === 'leader' || activeRole === 'manager_coordinator';
@@ -75,7 +62,7 @@ export const TasksPage: React.FC = () => {
     {
       ...INITIAL,
       department: activeDept || 'Design',
-      reviewerId: activeMemberId || 'mem-01',
+      reviewerId: activeMemberId || '',
     },
     { title: v => (!v || String(v).trim().length < 3) ? 'Title required (min 3 chars)' : null }
   );
@@ -83,10 +70,22 @@ export const TasksPage: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const res = await getTasks();
+    const [res, memberRes] = await Promise.all([getTasks(), getMembers()]);
     setLoading(false);
     if (!res.ok) { setError(res.message); return; }
-    setTasks(res.data?.tasks ?? []);
+    const taskRows = res.data?.tasks ?? [];
+    if (memberRes.ok) {
+      const nextMembers = memberRes.data?.data ?? [];
+      setMembers(nextMembers);
+      const memberNames = new Map(nextMembers.map((member:any) => [member.id,member.name]));
+      setTasks(taskRows.map((task:any) => ({
+        ...task,
+        assignedToName: memberNames.get(task.assignedToId) ?? task.assignedToName,
+        reviewerName: memberNames.get(task.reviewerId) ?? task.reviewerName,
+      })));
+      if (!values.assignedToId && nextMembers[0]) set('assignedToId', nextMembers[0].id);
+      if (!values.reviewerId && nextMembers[0]) set('reviewerId', nextMembers[0].id);
+    } else setTasks(taskRows);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -94,11 +93,8 @@ export const TasksPage: React.FC = () => {
   const handleCreate = async () => {
     if (!validate()) return;
     setSubmitting(true);
-    const assignedMember = TEAM_MEMBERS.find(m => m.id === values.assignedToId);
     const res = await createTask({
       ...values,
-      assignedToName: assignedMember ? assignedMember.name.split(' (')[0] : 'Assigned Member',
-      reviewerName: session?.demoPersona?.title || 'Reviewer',
     });
     setSubmitting(false);
     if (!res.ok) { addToast('error', res.message); return; }
@@ -257,18 +253,24 @@ export const TasksPage: React.FC = () => {
           <SelectInput
             value={values.assignedToId}
             onChange={e => {
-              const selectedMember = TEAM_MEMBERS.find(m => m.id === e.target.value);
+              const selectedMember = members.find(m => m.id === e.target.value);
               set('assignedToId', e.target.value);
               if (selectedMember) {
-                set('department', selectedMember.dept);
+                set('department', selectedMember.department);
               }
             }}
           >
-            {TEAM_MEMBERS.map(m => (
+            {members.map(m => (
               <option key={m.id} value={m.id}>
-                {m.name} — {m.dept} Dept
+                {m.name} — {m.department} Dept
               </option>
             ))}
+          </SelectInput>
+        </FormField>
+
+        <FormField label="Reviewer / Approver" required>
+          <SelectInput value={values.reviewerId} onChange={e => set('reviewerId', e.target.value)}>
+            {members.map(m => <option key={m.id} value={m.id}>{m.name} — {m.department}</option>)}
           </SelectInput>
         </FormField>
 

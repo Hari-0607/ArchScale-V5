@@ -16,16 +16,16 @@ import { useSession } from '../../hooks/useSession';
 const STATUSES = ['Present', 'Absent', 'Half Day', 'Leave', 'Holiday', 'Work From Home'];
 
 export const AttendancePage: React.FC = () => {
-  const { session } = useSession();
+  const { session, context } = useSession();
   const { toasts, addToast, removeToast } = useToast();
   const [records, setRecords] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // RBAC checks
-  const activeRole = session?.demoPersona?.role ?? session?.principal.role;
-  const activeDept = session?.demoPersona?.dept ?? (session?.principal as any)?.department;
-  const isFounder = activeRole === 'founder' || session?.principal.email?.includes('founder');
+  const activeRole = context?.roleKey ?? session?.demoPersona?.role ?? session?.principal.role;
+  const activeDept = context?.department ?? session?.demoPersona?.dept ?? session?.principal.department;
+  const isFounder = activeRole === 'founder';
   const isHRManager = (activeDept === 'HR' && activeRole !== 'intern') || isFounder;
   const isJuniorHR = activeDept === 'HR' && activeRole === 'intern';
   const isAuthorized = isHRManager || isJuniorHR;
@@ -221,7 +221,7 @@ export const AttendancePage: React.FC = () => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 'var(--sp-3)' }}>
                   {(selected.hrComments ?? []).map((c: any) => (
                     <div key={c.id || Math.random()} style={{ background: 'var(--color-surface-2)', borderRadius: 'var(--radius)', padding: '8px 10px', fontSize: 'var(--font-size-sm)' }}>
-                      <div style={{ fontWeight: 600, color: 'var(--color-text)', marginBottom: 2 }}>{c.author}</div>
+                      <div style={{ fontWeight: 600, color: 'var(--color-text)', marginBottom: 2 }}>{c.author ?? c.authorId}</div>
                       <div style={{ color: 'var(--color-text-muted)', lineHeight: 1.5 }}>{c.text}</div>
                       <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-subtle)', marginTop: 4 }}>
                         {new Date(c.timestamp).toLocaleString()}

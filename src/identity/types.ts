@@ -68,12 +68,12 @@ export interface IdentityProvider {
     /**
      * Revokes a single user session by ID.
      */
-    revokeSession(sessionId: string): Promise<void>;
+    revokeSession(accessToken: string): Promise<void>;
 
     /**
      * Revokes all active sessions for a user across all devices.
      */
-    revokeAllForUser(userId: string): Promise<void>;
+    revokeAllForUser(accessToken: string): Promise<void>;
 
     /**
      * Password recovery contract (Phase 4 deferred implementation).
@@ -85,6 +85,6 @@ export interface IdentityProvider {
      * Multi-factor authentication (MFA) status and verification.
      */
     getMfaStatus(userId: string): Promise<MfaStatus>;
-    challengeMfa(factorId: string): Promise<MfaChallenge>;
-    verifyMfa(factorId: string, challengeId: string, code: string): Promise<MfaVerificationResult>;
+    challengeMfa(factorId: string, accessToken?: string): Promise<MfaChallenge>;
+    verifyMfa(factorId: string, challengeId: string, code: string, accessToken?: string): Promise<MfaVerificationResult>;
 }

@@ -1,4 +1,5 @@
 import { runtimePool } from '../db/index.js';
+import { PoolClient } from 'pg';
 
 export interface CreateContextInput {
     userId: string;
@@ -20,7 +21,7 @@ export interface ContextResult {
  * never from untrusted client request bodies.
  */
 export async function createAccessContext(input: CreateContextInput, pool: any = runtimePool): Promise<ContextResult> {
-    const client = await pool.connect();
+    const client: PoolClient = await pool.connect();
     try {
         const res = await client.query<{ fn_create_access_context: string }>(
             `SELECT fn_create_access_context(
@@ -76,7 +77,7 @@ export async function renewAccessContext(
     sessionId: string,
     pool: any = runtimePool
 ): Promise<ContextResult> {
-    const client = await pool.connect();
+    const client: PoolClient = await pool.connect();
     try {
         const res = await client.query<{
             context_id: string;
@@ -113,7 +114,7 @@ export async function revokeAccessContext(
     sessionId: string,
     pool: any = runtimePool
 ): Promise<boolean> {
-    const client = await pool.connect();
+    const client: PoolClient = await pool.connect();
     try {
         const res = await client.query<{ fn_revoke_access_context: boolean }>(
             `SELECT fn_revoke_access_context($1::uuid, $2::uuid, $3::text);`,

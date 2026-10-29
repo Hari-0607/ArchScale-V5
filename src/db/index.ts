@@ -42,6 +42,16 @@ function createRuntimePool(): pg.Pool {
         });
     }
 
+    if (config.env === 'development') {
+        return new Pool({
+            connectionString: config.archscaleRuntimeDbUrl,
+            ssl: false,
+            max: 10,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000
+        });
+    }
+
     if (process.env.NODE_ENV === 'test') {
         // Local test mode: strictly must NOT read ARCHSCALE_RUNTIME_DB_URL
         const testDbUrl = process.env.ARCHSCALE_TEST_DB_URL;

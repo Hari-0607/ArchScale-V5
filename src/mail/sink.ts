@@ -52,7 +52,13 @@ export async function sendInvitationMail(options: SendInvitationOptions): Promis
         }
     }
 
-    // Local in-memory sink
+    // The sink is a test fixture only. A configured server must never report a
+    // successful invitation while silently keeping its token in process memory.
+    if (process.env.NODE_ENV !== 'test' || process.env.ALLOW_LOCAL_AUTH !== 'true') {
+        throw new Error('Invitation delivery is not configured. Set Supabase Auth SMTP and server credentials.');
+    }
+
+    // Local in-memory sink used by isolated unit tests only.
     sentMails.push({
         to: options.to,
         subject: `You have been invited to join ${orgName}`,

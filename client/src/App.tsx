@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import './styles/global.css';
 
-import { setToken, setContextId, logout } from './api/client';
+import { setToken, setRefreshToken, setContextId, logout } from './api/client';
 import { SessionContext, SessionData, ContextData } from './hooks/useSession';
 import { useToast } from './hooks/useToast';
 import { ToastList } from './components/Toast';
@@ -28,15 +28,25 @@ export const App: React.FC = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [pickingContext, setPickingContext] = useState(false);
 
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setSession(null); setContext(null); setPickingContext(false);
+      setToken(null); setRefreshToken(null); setContextId(null); setActiveNav('tasks');
+    };
+    window.addEventListener('xauth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('xauth:unauthorized', handleUnauthorized);
+  }, []);
+
   // Authoritative RBAC derivation: in demo environment, demoPersona specifies role and dept
   const personaRole = session?.demoPersona?.role
     ?? context?.roleKey
     ?? session?.principal.role;
-  const personaDept = session?.demoPersona?.dept
+  const personaDept = context?.department
+    ?? session?.demoPersona?.dept
     ?? (session?.principal as any)?.department
     ?? '';
 
-  const isBackstage = !!(session && (BACKSTAGE_ROLES.has(personaRole ?? '') || session.principal.email?.includes('founder')));
+  const isBackstage = !!(session && BACKSTAGE_ROLES.has(personaRole ?? ''));
   const isTenantAdmin = personaRole === 'business_owner' || personaRole === 'tenant_admin';
   const isHR = personaDept === 'HR';
   const isManager = personaRole === 'leader' || personaRole === 'manager_coordinator';
@@ -68,8 +78,8 @@ export const App: React.FC = () => {
   const handleLoginSuccess = (sess: SessionData) => {
     setSession(sess);
     setToken(sess.accessToken);
+    setRefreshToken(sess.refreshToken ?? null);
     const isBS = BACKSTAGE_ROLES.has(sess.principal.role ?? '')
-      || sess.principal.email?.includes('founder')
       || sess.demoPersona?.role === 'founder';
     if (isBS) {
       setActiveNav('tenants');
@@ -83,7 +93,7 @@ export const App: React.FC = () => {
     setContext(ctx);
     setContextId(ctx.contextId);
     setPickingContext(false);
-    setActiveNav('tasks');
+    setActiveNav(BACKSTAGE_ROLES.has(ctx.roleKey ?? '') ? 'tenants' : 'tasks');
   };
 
   const handleLogout = async () => {
@@ -93,6 +103,7 @@ export const App: React.FC = () => {
     setPickingContext(false);
     setActiveNav('tasks');
     setToken(null);
+    setRefreshToken(null);
     setContextId(null);
   };
 
@@ -151,7 +162,7 @@ export const App: React.FC = () => {
             setActiveNav(key);
           }}
           title={isBackstage ? 'ArchScale Platform' : (context?.organisationName ?? 'ArchScale')}
-          subtitle={isBackstage ? 'Backstage' : (session?.demoPersona?.title ?? personaDept)}
+          subtitle={isBackstage ? 'Backstage' : (context?.jobRole ?? session?.demoPersona?.title ?? personaDept)}
           collapsed={sidebarCollapsed}
           onCollapse={() => setSidebarCollapsed(c => !c)}
         />

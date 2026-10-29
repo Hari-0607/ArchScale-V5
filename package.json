@@ -12,6 +12,7 @@
     "proof": "node demo/server.js",
     "server": "npx tsx src/server/index.ts",
     "dev:server": "npx tsx watch src/server/index.ts",
+    "migrate:local": "npx tsx scripts/apply_local_migrations.ts",
     "build:ui": "vite build",
     "dev:ui": "vite",
     "build": "tsc"
@@ -38,6 +39,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
     "@types/express": "^5.0.6",
+    "axios": "^1.21.0",
     "express": "^5.3.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

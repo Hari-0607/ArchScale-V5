@@ -178,26 +178,37 @@ export class SupabaseProvider implements IdentityProvider {
         };
     }
 
-    async revokeSession(jwtOrSessionId: string): Promise<void> {
-        // Revoke via Supabase Auth Admin API (Never writes to auth.* schema directly)
-        const { error } = await this.adminClient.auth.admin.signOut(jwtOrSessionId, 'local');
-        if (error) {
-            // Also attempt client-level sign-out if treated as session token
-            await this.client.auth.signOut({ scope: 'local' }).catch(() => {});
+    async revokeSession(accessToken: string): Promise<void> {
+        const { error } = await this.clientForAccessToken(accessToken).auth.signOut({ scope: 'local' });
+        if (error) throw new AuthenticationError('Session revocation failed', 'AUTH_SESSION_REVOKE_FAILED');
+    }
+
+    async revokeAllForUser(accessToken: string): Promise<void> {
+        const { error } = await this.clientForAccessToken(accessToken).auth.signOut({ scope: 'global' });
+        if (error) throw new AuthenticationError('Global session revocation failed', 'AUTH_SESSION_REVOKE_FAILED');
+    }
+
+    async requestPasswordReset(email: string): Promise<void> {
+        const redirectTo = `${process.env.ARCHSCALE_FRONTEND_URL || 'http://localhost:5173'}/recover`;
+        const { error } = await this.client.auth.resetPasswordForEmail(email, { redirectTo });
+        if (error) throw new AuthenticationError('Recovery request could not be processed', 'AUTH_RECOVERY_FAILED');
+    }
+
+    async confirmPasswordReset(token: string, newPassword: string): Promise<{ userId: string }> {
+        const { data, error } = await this.client.auth.getUser(token);
+        if (error || !data.user) throw new AuthenticationError('Recovery token is invalid or expired', 'AUTH_RECOVERY_TOKEN_INVALID');
+        const claims = this.decodeJwtClaims(token);
+        if (!claims.amr?.some(method => method.method === 'recovery')) {
+            throw new AuthenticationError('A password recovery token is required', 'AUTH_RECOVERY_TOKEN_INVALID');
         }
-    }
-
-    async revokeAllForUser(userId: string): Promise<void> {
-        // Global user sign-out revokes all sessions across all devices
-        await this.adminClient.auth.admin.signOut(userId, 'global').catch(() => {});
-    }
-
-    async requestPasswordReset(_email: string): Promise<void> {
-        throw new Error('Password reset is not implemented in Phase 2 (deferred to Phase 4).');
-    }
-
-    async confirmPasswordReset(_token: string, _newPassword: string): Promise<void> {
-        throw new Error('Password reset is not implemented in Phase 2 (deferred to Phase 4).');
+        const recoveryClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
+            global: { headers: { Authorization: `Bearer ${token}` } },
+            auth: { persistSession: false, autoRefreshToken: false }
+        });
+        const { error: updateError } = await recoveryClient.auth.updateUser({ password: newPassword });
+        if (updateError) throw new AuthenticationError('Password update failed', 'AUTH_RECOVERY_FAILED');
+        await this.adminClient.auth.admin.signOut(token, 'global');
+        return { userId: data.user.id };
     }
 
     async getMfaStatus(userId: string): Promise<MfaStatus> {
@@ -224,8 +235,9 @@ export class SupabaseProvider implements IdentityProvider {
         };
     }
 
-    async challengeMfa(factorId: string): Promise<MfaChallenge> {
-        const { data, error } = await this.client.auth.mfa.challenge({ factorId });
+    async challengeMfa(factorId: string, accessToken?: string): Promise<MfaChallenge> {
+        const client = accessToken ? this.clientForAccessToken(accessToken) : this.client;
+        const { data, error } = await client.auth.mfa.challenge({ factorId });
         if (error || !data) {
             throw new AuthenticationError('MFA challenge generation failed', 'MFA_CHALLENGE_FAILED');
         }
@@ -236,8 +248,9 @@ export class SupabaseProvider implements IdentityProvider {
         };
     }
 
-    async verifyMfa(factorId: string, challengeId: string, code: string): Promise<MfaVerificationResult> {
-        const { data, error } = await this.client.auth.mfa.verify({
+    async verifyMfa(factorId: string, challengeId: string, code: string, accessToken?: string): Promise<MfaVerificationResult> {
+        const client = accessToken ? this.clientForAccessToken(accessToken) : this.client;
+        const { data, error } = await client.auth.mfa.verify({
             factorId,
             challengeId,
             code
@@ -252,6 +265,13 @@ export class SupabaseProvider implements IdentityProvider {
             refreshToken: data.refresh_token,
             aal: 'aal2'
         };
+    }
+
+    private clientForAccessToken(accessToken: string): SupabaseClient {
+        return createClient(config.supabaseUrl, config.supabaseAnonKey, {
+            global: { headers: { Authorization: `Bearer ${accessToken}` } },
+            auth: { persistSession: false, autoRefreshToken: false }
+        });
     }
 
     private decodeJwtClaims(token: string): JwtPayload {

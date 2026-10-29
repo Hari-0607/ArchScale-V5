@@ -66,6 +66,9 @@ export const OrgWorkspacePicker: React.FC<OrgPickerProps> = ({ onContextCreated,
       aal: data.aal ?? 'aal1',
       expiresAt: data.expiresAt ?? '',
       roleKey: mem?.roleKey,
+      membershipId: data.membership_id ?? mem?.membershipId,
+      department: data.department ?? mem?.department,
+      jobRole: data.job_role ?? mem?.jobRole,
     };
     setContextId(ctx.contextId);
     onContextCreated(ctx);

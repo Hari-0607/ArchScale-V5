@@ -40,17 +40,33 @@ export function validateConfig(): AppConfig {
     const env = (process.env.ARCHSCALE_ENV || '').toLowerCase() as AppConfig['env'];
     const allowLocalAuth = process.env.ALLOW_LOCAL_AUTH === 'true';
 
-    // Staging guardrail: refuse to run unless ARCHSCALE_ENV is 'staging'
-    // (or unit test with explicit local auth)
-    if (env !== 'staging' && !(nodeEnv === 'test' && allowLocalAuth)) {
+    const localTest = nodeEnv === 'test' && allowLocalAuth;
+    const localSupabase = env === 'development';
+    if (!['staging','production','development','test'].includes(env) || (env === 'test' && !localTest) || (env !== 'staging' && env !== 'production' && env !== 'development' && !localTest)) {
         throw new Error(
-            `ABORTED: Execution refused. ARCHSCALE_ENV must be explicitly set to 'staging' (current: '${env || 'undefined'}').`
+            `ABORTED: Execution refused. Set ARCHSCALE_ENV to development (loopback Supabase), staging, or production.`
         );
     }
 
     const adminUrl = process.env.SUPABASE_DB_ADMIN_URL || '';
     const runtimeUrl = process.env.ARCHSCALE_RUNTIME_DB_URL || '';
     const supabaseUrl = process.env.SUPABASE_URL || '';
+
+    if (localSupabase) {
+        const assertLoopback = (value: string, variable: string, allowedProtocols: string[]) => {
+            let parsed: URL;
+            try { parsed = new URL(value); } catch { throw new Error(`ABORTED: ${variable} must be a valid loopback URL.`); }
+            if (!['localhost','127.0.0.1','::1'].includes(parsed.hostname) || !allowedProtocols.includes(parsed.protocol)) {
+                throw new Error(`ABORTED: ${variable} must point to a local Supabase service.`);
+            }
+        };
+        assertLoopback(supabaseUrl, 'SUPABASE_URL', ['http:','https:']);
+        assertLoopback(adminUrl, 'SUPABASE_DB_ADMIN_URL', ['postgres:','postgresql:']);
+        assertLoopback(runtimeUrl, 'ARCHSCALE_RUNTIME_DB_URL', ['postgres:','postgresql:']);
+        for (const name of ['SUPABASE_ANON_KEY','SUPABASE_SERVICE_ROLE_KEY']) {
+            if (!process.env[name]) throw new Error(`ABORTED: ${name} is required for local Supabase development.`);
+        }
+    }
 
     if (env === 'staging') {
         // ---------------------------------------------------------------------------

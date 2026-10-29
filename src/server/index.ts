@@ -3,7 +3,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getIdentityProvider, IdentityProvider, VerifiedPrincipal } from '../identity/index.js';
+import { getIdentityProvider, IdentityProvider, VerifiedPrincipal, SupabaseProvider } from '../identity/index.js';
 import { listPrincipalMemberships, listOrgWorkspaces } from '../context/memberships.js';
 import { createAccessContext, renewAccessContext, revokeAccessContext } from '../context/access_context.js';
 import { runtimePool, withAppContext } from '../db/index.js';
@@ -11,6 +11,7 @@ import { decide } from '../authz/decide.js';
 import crypto from 'crypto';
 import { sendInvitationMail } from '../mail/sink.js';
 import { generateTotpCode } from '../utils/totp.js';
+import { PoolClient } from 'pg';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,24 +79,16 @@ export function createServer(
         return res.status(200).json({ status: 'ok', name: 'ArchScale Auth Demo' });
     });
 
-    app.get('/api/demo/presets', (req: Request, res: Response) => {
-        try {
-            const testUsersPath = path.join(process.cwd(), '.local/test-users.json');
-            if (fs.existsSync(testUsersPath)) {
-                const users = JSON.parse(fs.readFileSync(testUsersPath, 'utf-8'));
-                const presets = Object.entries(users).map(([key, val]: [string, any]) => ({
-                    key,
-                    email: val.email,
-                    role: val.role,
-                    hasMfa: !!val.totpSecret
-                }));
-                return res.status(200).json({ presets });
-            }
-        } catch {}
-        return res.status(200).json({ presets: [] });
-    });
+    // Demo identity endpoints are disabled in every deployed environment. They
+    // used to elevate arbitrary shared demo identities to AAL2 and are not an
+    // authentication mechanism for real tenants.
+    app.get('/api/demo/presets', (_req: Request, res: Response) =>
+        res.status(404).json({ error: 'NOT_FOUND' }));
 
     app.post('/api/demo/quick-login', async (req: Request, res: Response) => {
+        if (process.env.NODE_ENV !== 'test' || process.env.ALLOW_LOCAL_AUTH !== 'true') {
+            return res.status(404).json({ error: 'NOT_FOUND' });
+        }
         try {
             const { key, autoElevate } = req.body || {};
             const testUsersPath = path.join(process.cwd(), '.local/test-users.json');
@@ -212,7 +205,7 @@ export function createServer(
 
         // 1. Database-backed rate limiting per IP and per address
         try {
-            const client = await dbPool.connect();
+            const client: PoolClient = await dbPool.connect();
             try {
                 const ipHit = await client.query<{ fn_rate_limit_hit: boolean }>(
                     `SELECT fn_rate_limit_hit($1, 'recovery', 5, 300);`,
@@ -238,21 +231,11 @@ export function createServer(
             console.error('Rate limit query failed:', rlErr.message);
         }
 
-        // 2. Perform recovery action silently if user exists
+        // Supabase sends the recovery email; keep the response generic to avoid
+        // disclosing whether the address belongs to an account.
         if (email) {
-            try {
-                const userQuery = await dbPool.query(
-                    `SELECT id FROM public.users WHERE lower(email) = $1 LIMIT 1;`,
-                    [email]
-                );
-                if (userQuery.rows.length > 0) {
-                    await dbPool.query(`
-                        SELECT fn_audit_append('auth.recovery.requested', 'users', $1, NULL, $2::uuid);
-                    `, [email, userQuery.rows[0].id]).catch(() => {});
-                }
-            } catch {
-                // Fail closed silently
-            }
+            try { await (identityProvider || getIdentityProvider()).requestPasswordReset(email); }
+            catch { /* Generic response deliberately hides delivery/account state. */ }
         }
 
         // 3. Constant-time floor to eliminate email enumeration timing attacks
@@ -264,38 +247,18 @@ export function createServer(
 
     // 1c. POST /api/session/reset-password (B0.6: Revoke every session and context of that user)
     app.post('/api/session/reset-password', async (req: Request, res: Response) => {
-        const { email, newPassword } = req.body || {};
-        if (!email || !newPassword) {
-            return res.status(400).json({ error: 'EMAIL_AND_PASSWORD_REQUIRED' });
+        const { token, newPassword } = req.body || {};
+        if (!token || !newPassword || typeof token !== 'string' || typeof newPassword !== 'string' || newPassword.length < 12) {
+            return res.status(400).json({ error: 'TOKEN_AND_VALID_PASSWORD_REQUIRED' });
         }
         try {
             const idp: IdentityProvider = identityProvider || getIdentityProvider();
-            let userId: string | undefined;
             if (idp.confirmPasswordReset) {
-                const result = await idp.confirmPasswordReset(email, newPassword);
-                if (result && typeof result === 'object' && 'userId' in result) {
-                    userId = result.userId;
-                }
+                await idp.confirmPasswordReset(token, newPassword);
             }
 
-            // Invalidate all active contexts in the database for this user
-            const client = await dbPool.connect();
-            try {
-                if (!userId) {
-                    const uRes = await client.query(`SELECT id FROM public.users WHERE lower(email) = lower($1) LIMIT 1;`, [email]);
-                    userId = uRes.rows[0]?.id;
-                }
-                if (userId) {
-                    await client.query(`
-                        UPDATE public.access_contexts
-                        SET revoked_at = now()
-                        WHERE user_id = $1::uuid AND revoked_at IS NULL;
-                    `, [userId]);
-                }
-            } finally {
-                client.release();
-            }
-
+            // confirmPasswordReset asks Supabase Auth to sign out globally;
+            // all requests also revalidate the Auth token before using context.
             return res.status(200).json({ success: true, message: 'Password has been reset and all sessions revoked' });
         } catch (err: any) {
             return res.status(400).json({ error: err.code || 'RESET_FAILED', message: err.message });
@@ -345,6 +308,9 @@ export function createServer(
         const body = req.body || {};
         const code = (body.code || '').toString().trim();
         const bypass = body.bypass === true;
+        const localTest = process.env.NODE_ENV === 'test' && process.env.ALLOW_LOCAL_AUTH === 'true';
+
+        if (bypass && !localTest) return res.status(403).json({ error: 'AUTH_MFA_BYPASS_DENIED' });
 
         if (!bypass && (!code || !/^\d{6}$/.test(code))) {
             recordFailedAttempt(clientIp);
@@ -361,6 +327,7 @@ export function createServer(
                 return res.status(200).json({
                     accessToken: token,
                     refreshToken: token,
+                    principal: { ...principal, aal: 'aal2' },
                     aal: 'aal2'
                 });
             }
@@ -370,29 +337,25 @@ export function createServer(
                 const mfaStatus = await idp.getMfaStatus(principal.id);
                 const verifiedFactor = mfaStatus.factors.find(f => f.status === 'verified');
                 if (verifiedFactor) {
-                    const challenge = await idp.challengeMfa(verifiedFactor.id);
-                    const verification = await (idp as any).verifyMfa(
-                        verifiedFactor.id,
-                        challenge.id,
-                        code,
-                        principal.sessionId,
-                        principal.id,
-                        principal.email
-                    );
-                    elevatedPrincipals.add(principal.id);
-                    if (principal.sessionId) elevatedPrincipals.add(principal.sessionId);
+                    if (!(idp instanceof SupabaseProvider)) throw new Error('Use local test MFA verifier');
+                    const accessToken = (req.headers['authorization'] as string).substring('Bearer '.length).trim();
+                    const challenge = await idp.challengeMfa(verifiedFactor.id, accessToken);
+                    const verification = await idp.verifyMfa(verifiedFactor.id, challenge.id, code, accessToken);
                     clearRateLimit(clientIp);
+                    const verified = await idp.verify(verification.accessToken);
                     return res.status(200).json({
                         accessToken: verification.accessToken,
                         refreshToken: verification.refreshToken,
-                        aal: verification.aal
+                        principal: verified,
+                        aal: verified.aal
                     });
                 }
             } catch {
-                // Fallthrough to 2-minute window check or test bypass
+                if (!localTest) throw new Error('AUTH_MFA_FAILED');
             }
 
-            // 2. Check 2-minute window (±120s = ±4 steps) or test code '123456'
+            if (!localTest) throw new Error('AUTH_MFA_FAILED');
+            // Isolated unit-test-only TOTP fixture. This branch is unreachable in deployed environments.
             let valid = false;
             if (code === '123456') {
                 valid = true;
@@ -428,12 +391,24 @@ export function createServer(
             return res.status(200).json({
                 accessToken: token,
                 refreshToken: token,
+                principal: { ...principal, aal: 'aal2' },
                 aal: 'aal2'
             });
         } catch {
             recordFailedAttempt(clientIp);
             await delayToFloor(start, 1000);
             return res.status(401).json({ error: 'AUTH_MFA_FAILED' });
+        }
+    });
+
+    app.post('/api/session/refresh', async (req: Request, res: Response) => {
+        const refreshToken = req.body?.refreshToken;
+        if (typeof refreshToken !== 'string' || !refreshToken) return res.status(400).json({ error:'AUTH_REFRESH_TOKEN_REQUIRED' });
+        try {
+            const session = await (identityProvider || getIdentityProvider()).refresh(refreshToken);
+            return res.status(200).json({ accessToken:session.accessToken,refreshToken:session.refreshToken,principal:session.principal });
+        } catch {
+            return res.status(401).json({ error:'AUTH_REFRESH_FAILED' });
         }
     });
 
@@ -468,7 +443,18 @@ export function createServer(
                 aal: principal.aal === 'aal2' ? 'aal2' : 'aal1',
                 supportGrantId: body.supportGrantId
             }, dbPool);
-            return res.status(200).json({ context });
+            const client: PoolClient = await dbPool.connect();
+            try {
+                await client.query('BEGIN');
+                await client.query('SELECT fn_set_app_context($1::uuid,$2::uuid,$3::text)', [context.contextId,principal.id,principal.sessionId]);
+                const details = await client.query(`SELECT m.id AS membership_id,m.role_key,m.department,m.job_role,o.name AS organisation_name,w.name AS workspace_name
+                    FROM public.access_contexts ac JOIN public.memberships m ON m.id=ac.membership_id
+                    JOIN public.organisations o ON o.id=ac.organisation_id JOIN public.workspaces w ON w.id=ac.workspace_id
+                    WHERE ac.id=$1::uuid`, [context.contextId]);
+                await client.query('COMMIT');
+                return res.status(200).json({ context: { ...context, ...(details.rows[0] ?? {}) } });
+            } catch (error) { await client.query('ROLLBACK').catch(()=>{}); throw error; }
+            finally { client.release(); }
         } catch (err: any) {
             return res.status(400).json({ error: err.message || 'AUTH_CONTEXT_CREATE_FAILED' });
         }
@@ -499,9 +485,8 @@ export function createServer(
         if (contextId && typeof contextId === 'string') {
             await revokeAccessContext(contextId, principal.id, principal.sessionId).catch(() => {});
         }
-        if (principal.sessionId) {
-            await idp.revokeSession(principal.sessionId).catch(() => {});
-        }
+        const accessToken = (req.headers['authorization'] as string).substring('Bearer '.length).trim();
+        await idp.revokeSession(accessToken).catch(() => {});
         return res.status(200).json({ success: true });
     });
 
@@ -515,7 +500,7 @@ export function createServer(
         }
 
         try {
-            const client = await dbPool.connect();
+            const client: PoolClient = await dbPool.connect();
             try {
                 // B0.3: Mark expired before accept so status = 'Expired' is persisted
                 await client.query(`SELECT fn_mark_invitation_expired($1);`, [token.trim()]);
@@ -569,43 +554,22 @@ export function createServer(
 
     app.delete('/api/me/sessions/:id', authenticate, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
-        const sessionId = req.params.id;
-        try {
-            const client = await dbPool.connect();
-            try {
-                await client.query(`
-                    UPDATE public.access_contexts
-                    SET revoked_at = now()
-                    WHERE user_id = $1::uuid AND (id = $2::uuid OR session_id = $2) AND revoked_at IS NULL;
-                `, [principal.id, sessionId]);
-                return res.status(200).json({ success: true });
-            } finally {
-                client.release();
-            }
-        } catch (err: any) {
-            return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', message: err.message });
+        const idp: IdentityProvider = (req as any).idp;
+        if (String(req.params.id) !== principal.sessionId) {
+            return res.status(501).json({ error:'AUTH_SESSION_REVOCATION_UNSUPPORTED', message:'Supabase does not support revoking another device by session ID alone.' });
         }
+        const accessToken = (req.headers['authorization'] as string).substring('Bearer '.length).trim();
+        try { await idp.revokeSession(accessToken); return res.status(200).json({ success:true }); }
+        catch { return res.status(400).json({ error:'AUTH_SESSION_REVOKE_FAILED' }); }
     });
 
     app.delete('/api/me/sessions', authenticate, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const idp: IdentityProvider = (req as any).idp;
         try {
-            const client = await dbPool.connect();
-            try {
-                await client.query(`
-                    UPDATE public.access_contexts
-                    SET revoked_at = now()
-                    WHERE user_id = $1::uuid AND revoked_at IS NULL;
-                `, [principal.id]);
-
-                if (principal.sessionId) {
-                    await idp.revokeSession(principal.sessionId).catch(() => {});
-                }
-                return res.status(200).json({ success: true });
-            } finally {
-                client.release();
-            }
+            const accessToken = (req.headers['authorization'] as string).substring('Bearer '.length).trim();
+            await idp.revokeAllForUser(accessToken);
+            return res.status(200).json({ success:true });
         } catch (err: any) {
             return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', message: err.message });
         }
@@ -618,7 +582,7 @@ export function createServer(
             return res.status(401).json({ error: 'AUTH_CONTEXT_REQUIRED' });
         }
         const principal: VerifiedPrincipal = (req as any).principal;
-        const client = await dbPool.connect();
+        const client: PoolClient = await dbPool.connect();
 
         try {
             await client.query('BEGIN;');
@@ -653,25 +617,6 @@ export function createServer(
                 }
             } catch {}
 
-            // Demo persona override: X-Demo-Persona header always wins over DB context values.
-            // This is safe because the server issued the demoPersona in the quick-login response —
-            // it is not user-supplied data.
-            const demoHeader = req.headers['x-demo-persona'] as string;
-            if (demoHeader) {
-                try {
-                    const dp = JSON.parse(Buffer.from(demoHeader, 'base64').toString('utf8'));
-                    if (dp.role) (req as any).contextRole = dp.role;
-                    if (dp.dept) (req as any).contextDept = dp.dept;
-                    if (dp.memberId) (req as any).personaMemberId = dp.memberId;
-                } catch {}
-            }
-
-            // Final fallback: use role from the principal itself (set by quick-login)
-            if (!(req as any).contextRole && (principal as any).role) {
-                (req as any).contextRole = (principal as any).role;
-                (req as any).contextDept = (principal as any).department;
-            }
-
             let released = false;
             const cleanup = () => {
                 if (released) return;
@@ -692,7 +637,7 @@ export function createServer(
     app.get('/api/me', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const ctxQuery = await client.query(`
             SELECT 
@@ -741,7 +686,7 @@ export function createServer(
     app.get('/api/platform/organisations', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'platform.organisations.read');
         if (!decision.allow) {
@@ -754,7 +699,7 @@ export function createServer(
     app.get('/api/platform/organisations/:id', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'platform.organisations.read');
         if (!decision.allow) {
@@ -770,7 +715,7 @@ export function createServer(
     app.post('/api/platform/organisations', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'platform.organisations.manage', { isMutation: true });
@@ -791,7 +736,7 @@ export function createServer(
     app.post('/api/platform/organisations/:id/suspend', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'platform.organisations.manage', { isMutation: true });
@@ -809,7 +754,7 @@ export function createServer(
     app.post('/api/platform/organisations/:id/approve', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'platform.organisations.manage', { isMutation: true });
@@ -827,7 +772,7 @@ export function createServer(
     app.post('/api/platform/organisations/:id/invite-admin', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'platform.organisations.manage', { isMutation: true });
@@ -866,7 +811,7 @@ export function createServer(
     app.post('/api/platform/support/grants', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'platform.support.manage', { isMutation: true });
@@ -887,7 +832,7 @@ export function createServer(
     app.post('/api/platform/support/grants/:id/revoke', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'platform.support.manage', { isMutation: true });
         if (!decision.allow) {
@@ -904,7 +849,7 @@ export function createServer(
     app.get('/api/platform/audit', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'platform.audit.read');
         if (!decision.allow) {
@@ -915,25 +860,10 @@ export function createServer(
     });
 
     // --- FRONTSTAGE (TENANT) ROUTES ---
-    // Mutable demo team fallback when database memberships aren't fully seeded
-    const team11Demo: any[] = [
-        { id: 'mem-admin', userId: 'usr-admin', name: 'Tenant Admin',      email: 'admin@studio.archscale', role_key: 'business_owner',      department: 'Management', job_role: 'Studio Owner',          status: 'ACTIVE', reporting_manager_membership_id: null },
-        { id: 'mem-dm1',   userId: 'usr-dm1',   name: 'Design Manager 1',  email: 'dm1@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'Lead Architect',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-        { id: 'mem-jd1',   userId: 'usr-jd1',   name: 'Junior Designer 1', email: 'jd1@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: 'Junior Architect',      status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm1' },
-        { id: 'mem-dm2',   userId: 'usr-dm2',   name: 'Design Manager 2',  email: 'dm2@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'MEP Design Lead',       status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-        { id: 'mem-jd2',   userId: 'usr-jd2',   name: 'Junior Designer 2', email: 'jd2@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: 'CAD Technician',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm2' },
-        { id: 'mem-dm3',   userId: 'usr-dm3',   name: 'Design Manager 3',  email: 'dm3@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'Landscape Design Lead', status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-        { id: 'mem-jd3',   userId: 'usr-jd3',   name: 'Junior Designer 3', email: 'jd3@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: '3D Visualizer',         status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm3' },
-        { id: 'mem-acc-m', userId: 'usr-accm',  name: 'Accounts Manager',  email: 'accm@studio.archscale',  role_key: 'manager_coordinator',  department: 'Accounts',   job_role: 'Finance Controller',    status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-        { id: 'mem-acc-j', userId: 'usr-accj',  name: 'Junior Accountant', email: 'accj@studio.archscale',  role_key: 'intern',               department: 'Accounts',   job_role: 'Billing Specialist',    status: 'ACTIVE', reporting_manager_membership_id: 'mem-acc-m' },
-        { id: 'mem-hr-m',  userId: 'usr-hrm',   name: 'HR Manager',        email: 'hrm@studio.archscale',   role_key: 'manager_coordinator',  department: 'HR',         job_role: 'People & Culture Lead', status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-        { id: 'mem-hr-j',  userId: 'usr-hrj',   name: 'Junior HR',         email: 'hrj@studio.archscale',   role_key: 'intern',               department: 'HR',         job_role: 'HR Coordinator',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-hr-m' },
-    ];
-
     app.get('/api/org/members', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'org.members.read');
         if (!decision.allow) {
@@ -952,7 +882,7 @@ export function createServer(
                     m.job_role,
                     m.reporting_manager_membership_id,
                     m.status,
-                    COALESCE(u.display_name, u.email, m.id::text) AS name,
+                    COALESCE(u.email, m.id::text) AS name,
                     COALESCE(u.email, '') AS email
                 FROM fn_list_org_members() m
                 LEFT JOIN public.users u ON u.id = m.user_id
@@ -960,7 +890,7 @@ export function createServer(
             `);
             memberRows = enriched.rows;
         } catch {
-            // fn_list_org_members may fail outside a valid DB context; swallow and fall through to demo data
+            return res.status(503).json({ error: 'MEMBER_DIRECTORY_UNAVAILABLE' });
         }
 
         // Normalise DB rows to camelCase (DB returns snake_case)
@@ -977,32 +907,18 @@ export function createServer(
             _demoOnly: isDemoData,
         });
 
-        const useDemo = memberRows.length < 11;
-        const data = useDemo
-            ? team11Demo.map(r => normaliseRow(r, true))
-            : memberRows.map(r => normaliseRow(r, false));
-
-        return res.status(200).json({ decision, data, _usingDemoData: useDemo });
+        return res.status(200).json({ decision, data: memberRows.map(r => normaliseRow(r, false)) });
     });
 
     app.patch('/api/org/members/:id/role', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'org.members.manage', { isMutation: true });
         if (!decision.allow) {
             return res.status(403).json({ error: decision.reasonCode, decision });
-        }
-
-        // Support demo IDs smoothly in memory
-        if (req.params.id.startsWith('mem-')) {
-            const member = team11Demo.find(m => m.id === req.params.id);
-            if (member) {
-                member.role_key = body.roleKey;
-                return res.status(200).json({ success: true, member });
-            }
         }
 
         try {
@@ -1016,21 +932,12 @@ export function createServer(
     app.post('/api/org/members/:id/suspend', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'org.members.manage', { isMutation: true });
         if (!decision.allow) {
             return res.status(403).json({ error: decision.reasonCode, decision });
-        }
-
-        // Support demo IDs in memory
-        if (req.params.id.startsWith('mem-')) {
-            const member = team11Demo.find(m => m.id === req.params.id);
-            if (member) {
-                member.status = 'SUSPENDED';
-                return res.status(200).json({ success: true, member });
-            }
         }
 
         try {
@@ -1044,21 +951,12 @@ export function createServer(
     app.post('/api/org/members/:id/reactivate', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'org.members.manage', { isMutation: true });
         if (!decision.allow) {
             return res.status(403).json({ error: decision.reasonCode, decision });
-        }
-
-        // Support demo IDs in memory
-        if (req.params.id.startsWith('mem-')) {
-            const member = team11Demo.find(m => m.id === req.params.id);
-            if (member) {
-                member.status = 'ACTIVE';
-                return res.status(200).json({ success: true, member });
-            }
         }
 
         try {
@@ -1072,7 +970,7 @@ export function createServer(
     app.patch('/api/org/members/:id/profile', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'org.members.manage', { isMutation: true });
@@ -1090,7 +988,7 @@ export function createServer(
     app.post('/api/org/settings/mfa', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'org.settings.manage', { isMutation: true });
@@ -1112,7 +1010,7 @@ export function createServer(
     app.get('/api/org/support-grants', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'org.settings.manage');
         if (!decision.allow) {
@@ -1133,7 +1031,7 @@ export function createServer(
     app.get('/api/org/invitations', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'org.members.invite');
         if (!decision.allow) {
@@ -1146,7 +1044,7 @@ export function createServer(
     app.post('/api/org/invitations', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
         const body = req.body || {};
 
         const decision = await decide(client, principal, contextId, 'org.members.invite', { isMutation: true });
@@ -1231,7 +1129,7 @@ export function createServer(
     app.post('/api/org/invitations/:id/revoke', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'org.members.invite', { isMutation: true });
         if (!decision.allow) {
@@ -1248,7 +1146,7 @@ export function createServer(
     app.post('/api/org/invitations/:id/resend', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
-        const client = (req as any).dbClient;
+        const client = (req as any).dbClient as PoolClient;
 
         const decision = await decide(client, principal, contextId, 'org.members.invite', { isMutation: true });
         if (!decision.allow) {
@@ -1268,7 +1166,7 @@ export function createServer(
                 await sendInvitationMail({
                     to: targetEmail,
                     rawToken: newRawToken,
-                    invitationId: req.params.id,
+                    invitationId: String(req.params.id),
                     organisationName: decision.organisationName
                 });
             }
@@ -1279,222 +1177,93 @@ export function createServer(
         }
     });
 
-    // --- TEST APPLICATION A: TASKS ---
-    const initialTasks: any[] = [
-        { id: 'tsk-001', workId: 'WRK-1001', title: 'Conceptual Structural Layout', description: 'Initial massing and structural grid design', assignedToId: 'lead-01', assignedToName: 'Design Manager 1', department: 'Design', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-20', dueDateTime: '2026-11-05T18:00:00Z', priority: 'High', status: 'In Progress', approvalStatus: 'Pending', createdById: 'owner-01' },
-        { id: 'tsk-002', workId: 'WRK-1002', title: '3D Facade Parametric Study', description: 'Curtain wall panel subdivision and solar analysis', assignedToId: 'des-01', assignedToName: 'Junior Designer 1', department: 'Design', reviewerId: 'lead-01', reviewerName: 'Design Manager 1', startDate: '2026-10-22', dueDateTime: '2026-11-01T18:00:00Z', priority: 'Normal', status: 'In Progress', approvalStatus: 'Not Required', createdById: 'lead-01' },
-        { id: 'tsk-003', workId: 'WRK-1003', title: 'HVAC Ducting & Riser Coordination', description: 'MEP clash detection with ceiling clearance', assignedToId: 'lead-02', assignedToName: 'Design Manager 2', department: 'Design', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-21', dueDateTime: '2026-11-06T18:00:00Z', priority: 'High', status: 'To Do', approvalStatus: 'Not Required', createdById: 'owner-01' },
-        { id: 'tsk-004', workId: 'WRK-1004', title: 'Floorplan Working Drawings (Levels 2-4)', description: 'CAD drafting and door schedule dimensions', assignedToId: 'des-02', assignedToName: 'Junior Designer 2', department: 'Design', reviewerId: 'lead-02', reviewerName: 'Design Manager 2', startDate: '2026-10-23', dueDateTime: '2026-11-03T18:00:00Z', priority: 'Normal', status: 'Completed', approvalStatus: 'Approved', createdById: 'lead-02' },
-        { id: 'tsk-005', workId: 'WRK-1005', title: 'Landscape Planting & Hardscape Layout', description: 'Pedestrian plaza paving patterns and irrigation', assignedToId: 'lead-03', assignedToName: 'Design Manager 3', department: 'Design', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-24', dueDateTime: '2026-11-10T18:00:00Z', priority: 'Normal', status: 'In Review', approvalStatus: 'Pending', createdById: 'owner-01' },
-        { id: 'tsk-006', workId: 'WRK-1006', title: 'Photorealistic Exterior CGI Renders', description: 'V-Ray lighting setups and materiality textures', assignedToId: 'des-03', assignedToName: 'Junior Designer 3', department: 'Design', reviewerId: 'lead-03', reviewerName: 'Design Manager 3', startDate: '2026-10-25', dueDateTime: '2026-11-04T18:00:00Z', priority: 'Low', status: 'In Progress', approvalStatus: 'Not Required', createdById: 'lead-03' },
-        { id: 'tsk-007', workId: 'WRK-1007', title: 'Q3 Tenant Architectural Billing Reconciliation', description: 'Milestone invoicing and contractor retainage audit', assignedToId: 'acc-01', assignedToName: 'Accounts Manager', department: 'Accounts', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-15', dueDateTime: '2026-10-31T18:00:00Z', priority: 'Urgent', status: 'In Progress', approvalStatus: 'Pending', createdById: 'owner-01' },
-        { id: 'tsk-008', workId: 'WRK-1008', title: 'Vendor Invoice Processing & GL Entry', description: 'Material delivery verification and payment voucher creation', assignedToId: 'acc-02', assignedToName: 'Junior Accountant', department: 'Accounts', reviewerId: 'acc-01', reviewerName: 'Accounts Manager', startDate: '2026-10-26', dueDateTime: '2026-11-02T18:00:00Z', priority: 'Normal', status: 'To Do', approvalStatus: 'Not Required', createdById: 'acc-01' },
-        { id: 'tsk-009', workId: 'WRK-1009', title: 'Annual Performance Appraisal Framework', description: 'Department KPIs and evaluation rubrics for design staff', assignedToId: 'hr-01', assignedToName: 'HR Manager', department: 'HR', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-18', dueDateTime: '2026-11-15T18:00:00Z', priority: 'High', status: 'In Progress', approvalStatus: 'Not Required', createdById: 'owner-01' },
-        { id: 'tsk-010', workId: 'WRK-1010', title: 'New Intern Onboarding & Hardware Setup', description: 'Workstation provisioning and security policy signoff', assignedToId: 'hr-02', assignedToName: 'Junior HR', department: 'HR', reviewerId: 'hr-01', reviewerName: 'HR Manager', startDate: '2026-10-27', dueDateTime: '2026-11-05T18:00:00Z', priority: 'Normal', status: 'Completed', approvalStatus: 'Approved', createdById: 'hr-01' }
-    ];
-    let tasksList = [...initialTasks];
-
+    // The app tables are tenant scoped and protected by FORCE RLS. These handlers
+    // use the request context transaction established by requireContext.
     app.get('/api/tasks', authenticate, requireContext, async (req: Request, res: Response) => {
-        const principal: VerifiedPrincipal = (req as any).principal;
-        const role = (req as any).contextRole || (principal as any).role || 'intern';
-        const dept = (req as any).contextDept || '';
-        // memberId from demo persona (e.g. 'des-01') used for own-task filtering
-        const memberId = (req as any).personaMemberId || principal.id;
-
-        // Tenant admin and platform super admin: full access
-        if (role === 'business_owner' || role === 'founder') {
-            return res.status(200).json({ tasks: tasksList });
-        }
-
-        // Design department — Design Managers get full Design visibility (cross-team exception per §09)
-        if (dept === 'Design' && (role === 'leader' || role === 'manager_coordinator')) {
-            const visibleTasks = tasksList.filter(t => t.department === 'Design');
-            return res.status(200).json({ tasks: visibleTasks });
-        }
-
-        // Design juniors — own tasks only
-        if (dept === 'Design' && role === 'intern') {
-            const visibleTasks = tasksList.filter(t => t.assignedToId === memberId || t.assignedToId === principal.id);
-            return res.status(200).json({ tasks: visibleTasks });
-        }
-
-        // Accounts department — managers see Accounts tasks, juniors see own
-        if (dept === 'Accounts') {
-            const visibleTasks = (role === 'manager_coordinator' || role === 'leader')
-                ? tasksList.filter(t => t.department === 'Accounts')
-                : tasksList.filter(t => t.assignedToId === memberId || t.assignedToId === principal.id);
-            return res.status(200).json({ tasks: visibleTasks });
-        }
-
-        // HR department — managers see HR tasks, juniors see own
-        if (dept === 'HR') {
-            const visibleTasks = (role === 'manager_coordinator' || role === 'leader')
-                ? tasksList.filter(t => t.department === 'HR')
-                : tasksList.filter(t => t.assignedToId === memberId || t.assignedToId === principal.id);
-            return res.status(200).json({ tasks: visibleTasks });
-        }
-
-        // Default: own tasks only
-        return res.status(200).json({ tasks: tasksList.filter(t => t.assignedToId === memberId || t.assignedToId === principal.id) });
+        const client = (req as any).dbClient as PoolClient;
+        const result = await client.query(`SELECT t.* FROM public.tasks t ORDER BY t.due_at NULLS LAST, t.created_at DESC`);
+        const tasks = result.rows.map((r: any) => ({ id:r.id, workId:r.work_id, title:r.title, description:r.description,
+            assignedToId:r.assigned_to_membership_id, assignedToName:r.assigned_to_membership_id,
+            department:r.department, reviewerId:r.reviewer_membership_id, reviewerName:r.reviewer_membership_id,
+            startDate:r.start_date, dueDateTime:r.due_at, priority:r.priority, status:r.status,
+            approvalStatus:r.approval_status, createdById:r.created_by_membership_id,
+            approvedById:r.approved_by_membership_id }));
+        return res.status(200).json({ tasks });
     });
 
     app.post('/api/tasks', authenticate, requireContext, async (req: Request, res: Response) => {
-        const principal: VerifiedPrincipal = (req as any).principal;
-        const role = (req as any).contextRole || (principal as any).role || '';
-        // Juniors view and update permitted fields only; cannot create tasks
-        if (role === 'intern') {
-            return res.status(403).json({
-                error: 'AUTH_TASK_CREATE_DENIED',
-                message: 'Section 08: Juniors may only view and update their own assigned tasks. Task creation is restricted to Managers and Administrators.'
-            });
+        const client = (req as any).dbClient as PoolClient;
+        const b = req.body || {};
+        if (typeof b.title !== 'string' || b.title.trim().length < 3 || !b.assignedToId || !b.reviewerId || !b.department) {
+            return res.status(400).json({ error:'TASK_FIELDS_REQUIRED' });
         }
-
-        const body = req.body || {};
-        const newTask = {
-            id: `tsk-${Date.now()}`,
-            workId: `WRK-${Math.floor(1000 + Math.random() * 9000)}`,
-            title: body.title || 'Untitled Task',
-            description: body.description || '',
-            assignedToId: body.assignedToId || principal.id,
-            assignedToName: body.assignedToName || 'Assigned Member',
-            department: body.department || 'Design',
-            reviewerId: body.reviewerId || principal.id,
-            reviewerName: body.reviewerName || 'Manager',
-            startDate: new Date().toISOString().split('T')[0],
-            dueDateTime: body.dueDateTime || new Date(Date.now() + 7 * 86400000).toISOString(),
-            priority: body.priority || 'Normal',
-            status: body.status || 'To Do',
-            approvalStatus: body.approvalStatus || 'Not Required',
-            createdById: principal.id
-        };
-        tasksList.unshift(newTask);
-        return res.status(201).json({ success: true, task: newTask });
+        try {
+            const result = await client.query(`INSERT INTO public.tasks(title,description,assigned_to_membership_id,department,reviewer_membership_id,start_date,due_at,priority,status,approval_status)
+                VALUES($1,$2,$3::uuid,$4,$5::uuid,COALESCE($6::date,CURRENT_DATE),$7::timestamptz,COALESCE($8,'Normal'),COALESCE($9,'To Do'),COALESCE($10,'Not Required')) RETURNING *`,
+                [b.title.trim(),b.description ?? '',b.assignedToId,b.department,b.reviewerId,b.startDate || null,b.dueDateTime || null,b.priority,b.status,b.approvalStatus]);
+            return res.status(201).json({ success:true, task:result.rows[0] });
+        } catch (err: any) { return res.status(403).json({ error:'TASK_CREATE_DENIED', message:err.message }); }
     });
 
     app.patch('/api/tasks/:id', authenticate, requireContext, async (req: Request, res: Response) => {
-        const task = tasksList.find(t => t.id === req.params.id);
-        if (!task) return res.status(404).json({ error: 'TASK_NOT_FOUND' });
-        const body = req.body || {};
-        if (body.status) task.status = body.status;
-        if (body.priority) task.priority = body.priority;
-        return res.status(200).json({ success: true, task });
+        const client = (req as any).dbClient as PoolClient;
+        const fields: Record<string,string> = { status:'status', priority:'priority', title:'title', description:'description', assignedToId:'assigned_to_membership_id', reviewerId:'reviewer_membership_id', dueDateTime:'due_at' };
+        const values: unknown[] = []; const sets: string[] = [];
+        for (const [key,column] of Object.entries(fields)) if (Object.hasOwn(req.body || {},key)) {
+            values.push(req.body[key]); sets.push(`${column}=$${values.length}${['assigned_to_membership_id','reviewer_membership_id'].includes(column) ? '::uuid' : ''}`);
+        }
+        if (!sets.length) return res.status(400).json({ error:'NO_TASK_FIELDS' });
+        values.push(req.params.id);
+        try {
+            const result = await client.query(`UPDATE public.tasks SET ${sets.join(',')} WHERE id=$${values.length}::uuid RETURNING *`,values);
+            if (!result.rowCount) return res.status(404).json({ error:'TASK_NOT_FOUND' });
+            return res.status(200).json({ success:true, task:result.rows[0] });
+        } catch (err:any) { return res.status(403).json({ error:'TASK_EDIT_DENIED', message:err.message }); }
     });
 
     app.post('/api/tasks/:id/approve', authenticate, requireContext, async (req: Request, res: Response) => {
-        const principal: VerifiedPrincipal = (req as any).principal;
-        const role = (req as any).contextRole || (principal as any).role || '';
-        // Only managers (leader, manager_coordinator) and tenant/platform admins may approve
-        if (role === 'intern') {
-            return res.status(403).json({
-                error: 'AUTH_TASK_APPROVAL_DENIED',
-                message: 'Section 08 & 14: Only designated Managers and Administrators may approve tasks.'
-            });
-        }
-
-        const task = tasksList.find(t => t.id === req.params.id);
-        if (!task) return res.status(404).json({ error: 'TASK_NOT_FOUND' });
-        const body = req.body || {};
-        task.approvalStatus = body.approvalStatus || 'Approved';
-        return res.status(200).json({ success: true, task });
+        const client = (req as any).dbClient as PoolClient;
+        const status = (req.body || {}).approvalStatus;
+        if (!['Approved','Rejected'].includes(status)) return res.status(400).json({ error:'INVALID_APPROVAL_STATUS' });
+        try {
+            const actor = await client.query('SELECT membership_id FROM public.access_contexts WHERE id=$1::uuid',[ (req as any).contextId ]);
+            const result = await client.query(`UPDATE public.tasks SET approval_status=$1, approved_by_membership_id=$2::uuid WHERE id=$3::uuid RETURNING *`,[status,actor.rows[0]?.membership_id,req.params.id]);
+            if (!result.rowCount) return res.status(404).json({ error:'TASK_NOT_FOUND' });
+            return res.status(200).json({ success:true, task:result.rows[0] });
+        } catch (err:any) { return res.status(403).json({ error:'TASK_APPROVAL_DENIED', message:err.message }); }
     });
 
     // --- TEST APPLICATION B: ATTENDANCE (RESTRICTED ACCESS) ---
-    const initialAttendance: any[] = [
-        { id: 'att-01', attendanceId: 'ATT-2026-001', memberId: 'mem-01', memberName: 'Tenant Admin (Business Owner)', department: 'Management', date: '2026-10-28', checkInTime: '08:55 AM', checkOutTime: '06:30 PM', status: 'Present', remarks: 'Executive review', hrComments: [{ id: 'c1', author: 'HR Manager', text: 'On-site all day', timestamp: '2026-10-28T10:00:00Z' }], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-02', attendanceId: 'ATT-2026-002', memberId: 'mem-02', memberName: 'Design Manager 1', department: 'Design', date: '2026-10-28', checkInTime: '09:05 AM', checkOutTime: '06:15 PM', status: 'Present', remarks: 'Client coordination', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-03', attendanceId: 'ATT-2026-003', memberId: 'mem-03', memberName: 'Junior Designer 1', department: 'Design', date: '2026-10-28', checkInTime: '09:12 AM', checkOutTime: '06:05 PM', status: 'Present', remarks: '', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-04', attendanceId: 'ATT-2026-004', memberId: 'mem-04', memberName: 'Design Manager 2', department: 'Design', date: '2026-10-28', checkInTime: '09:00 AM', checkOutTime: '05:45 PM', status: 'Present', remarks: '', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-05', attendanceId: 'ATT-2026-005', memberId: 'mem-05', memberName: 'Junior Designer 2', department: 'Design', date: '2026-10-28', checkInTime: '09:30 AM', checkOutTime: '06:30 PM', status: 'Half Day', remarks: 'Medical appointment morning', hrComments: [{ id: 'c2', author: 'Junior HR', text: 'Doctor note verified', timestamp: '2026-10-28T14:30:00Z' }], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-06', attendanceId: 'ATT-2026-006', memberId: 'mem-06', memberName: 'Design Manager 3', department: 'Design', date: '2026-10-28', checkInTime: '08:45 AM', checkOutTime: '06:00 PM', status: 'Present', remarks: 'Site visit in afternoon', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-07', attendanceId: 'ATT-2026-007', memberId: 'mem-07', memberName: 'Junior Designer 3', department: 'Design', date: '2026-10-28', checkInTime: '09:00 AM', checkOutTime: '06:00 PM', status: 'Work From Home', remarks: 'Remote CAD rendering run', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-08', attendanceId: 'ATT-2026-008', memberId: 'mem-08', memberName: 'Accounts Manager', department: 'Accounts', date: '2026-10-28', checkInTime: '08:50 AM', checkOutTime: '06:10 PM', status: 'Present', remarks: 'Audit preparation', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-09', attendanceId: 'ATT-2026-009', memberId: 'mem-09', memberName: 'Junior Accountant', department: 'Accounts', date: '2026-10-28', checkInTime: '09:15 AM', checkOutTime: '06:15 PM', status: 'Present', remarks: '', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-10', attendanceId: 'ATT-2026-010', memberId: 'mem-10', memberName: 'HR Manager', department: 'HR', date: '2026-10-28', checkInTime: '08:40 AM', checkOutTime: '06:20 PM', status: 'Present', remarks: 'HR team supervision', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
-        { id: 'att-11', attendanceId: 'ATT-2026-011', memberId: 'mem-11', memberName: 'Junior HR', department: 'HR', date: '2026-10-28', checkInTime: '09:00 AM', checkOutTime: '06:00 PM', status: 'Present', remarks: '', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' }
-    ];
-    let attendanceList = [...initialAttendance];
-
     app.get('/api/attendance', authenticate, requireContext, async (req: Request, res: Response) => {
-        const principal: VerifiedPrincipal = (req as any).principal;
-        const role = (req as any).contextRole || (principal as any).role || '';
-        const dept = (req as any).contextDept || '';
-
-        if (role === 'founder' || principal.email?.includes('founder')) {
-            return res.status(200).json({ records: attendanceList, audited: true });
-        }
-
-        if (dept === 'HR' || principal.email?.includes('hr') || role === 'hr_manager' || role === 'junior_hr') {
-            return res.status(200).json({ records: attendanceList });
-        }
-
-        if (role === 'business_owner') {
-            return res.status(403).json({
-                error: 'AUTH_ATTENDANCE_RESTRICTED',
-                message: 'Section 11 Matrix: Tenant Admin cannot access Attendance by default.'
-            });
-        }
-
-        return res.status(403).json({
-            error: 'AUTH_ATTENDANCE_RESTRICTED',
-            message: 'Section 11 Matrix: All other members cannot view Attendance, including their own records.'
-        });
+        const client = (req as any).dbClient as PoolClient;
+        const result = await client.query(`SELECT r.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('id',c.id,'authorId',c.author_membership_id,'text',c.body,'timestamp',c.created_at) ORDER BY c.created_at) FROM public.attendance_comments c WHERE c.attendance_record_id=r.id),'[]'::jsonb) AS hr_comments FROM public.attendance_records r ORDER BY r.attendance_date DESC,r.membership_id`);
+        return res.status(200).json({ records: result.rows.map((r:any)=>({ id:r.id,attendanceId:r.attendance_id,memberId:r.membership_id,
+            memberName:r.membership_id,department:r.department,date:r.attendance_date,checkInTime:r.check_in,checkOutTime:r.check_out,
+            status:r.status,remarks:r.remarks,hrComments:r.hr_comments,createdBy:r.created_by_membership_id,lastUpdatedBy:r.last_updated_by_membership_id })) });
     });
 
     app.patch('/api/attendance/:id', authenticate, requireContext, async (req: Request, res: Response) => {
-        const principal: VerifiedPrincipal = (req as any).principal;
-        const role = (req as any).contextRole || (principal as any).role || '';
-        const dept = (req as any).contextDept || '';
-
-        const isHrManager = (dept === 'HR' && role !== 'intern') || principal.email?.includes('hr-manager') || role === 'hr_manager';
-        if (!isHrManager) {
-            return res.status(403).json({
-                error: 'AUTH_ATTENDANCE_EDIT_DENIED',
-                message: 'Section 11 Matrix: Only HR Manager may edit attendance values. Junior HR is restricted to commenting.'
-            });
-        }
-
-        const record = attendanceList.find(a => a.id === req.params.id);
-        if (!record) return res.status(404).json({ error: 'ATTENDANCE_RECORD_NOT_FOUND' });
-
-        const body = req.body || {};
-        if (body.status) record.status = body.status;
-        if (body.checkInTime) record.checkInTime = body.checkInTime;
-        if (body.checkOutTime) record.checkOutTime = body.checkOutTime;
-        record.lastUpdatedBy = principal.email || 'HR Manager';
-
-        return res.status(200).json({ success: true, record });
+        const client = (req as any).dbClient as PoolClient; const b=req.body||{};
+        const allowed:Record<string,string>={status:'status',checkInTime:'check_in',checkOutTime:'check_out',remarks:'remarks'};
+        const vals:unknown[]=[];const sets:string[]=[];
+        for(const [key,col] of Object.entries(allowed))if(Object.hasOwn(b,key)){vals.push(b[key]);sets.push(`${col}=$${vals.length}`)}
+        if(!sets.length)return res.status(400).json({error:'NO_ATTENDANCE_FIELDS'});
+        vals.push(req.params.id);
+        try{const result=await client.query(`UPDATE public.attendance_records SET ${sets.join(',')} WHERE id=$${vals.length}::uuid RETURNING *`,vals);
+            if(!result.rowCount)return res.status(404).json({error:'ATTENDANCE_RECORD_NOT_FOUND'});
+            return res.status(200).json({success:true,record:result.rows[0]});
+        }catch(err:any){return res.status(403).json({error:'ATTENDANCE_EDIT_DENIED',message:err.message})}
     });
 
     app.post('/api/attendance/:id/comment', authenticate, requireContext, async (req: Request, res: Response) => {
-        const principal: VerifiedPrincipal = (req as any).principal;
-        const dept = (req as any).contextDept || '';
-
-        const isHrTeam = dept === 'HR' || principal.email?.includes('hr');
-        if (!isHrTeam) {
-            return res.status(403).json({
-                error: 'AUTH_ATTENDANCE_COMMENT_DENIED',
-                message: 'Section 11 Matrix: Only HR staff may append attendance comments.'
-            });
-        }
-
-        const record = attendanceList.find(a => a.id === req.params.id);
-        if (!record) return res.status(404).json({ error: 'ATTENDANCE_RECORD_NOT_FOUND' });
-
-        const body = req.body || {};
-        if (!body.comment || !body.comment.trim()) {
-            return res.status(400).json({ error: 'COMMENT_REQUIRED' });
-        }
-
-        if (!record.hrComments) record.hrComments = [];
-        const newComment = {
-            id: `c-${Date.now()}`,
-            author: principal.email?.includes('junior') ? 'Junior HR' : 'HR Manager',
-            text: body.comment.trim(),
-            timestamp: new Date().toISOString()
-        };
-        record.hrComments.push(newComment);
-
-        return res.status(200).json({ success: true, comment: newComment });
+        const client=(req as any).dbClient;const comment=(req.body||{}).comment;
+        if(typeof comment!=='string'||!comment.trim())return res.status(400).json({error:'COMMENT_REQUIRED'});
+        try{const result=await client.query(`INSERT INTO public.attendance_comments(attendance_record_id,organisation_id,author_membership_id,body)
+            SELECT r.id,r.organisation_id,ac.membership_id,$2 FROM public.attendance_records r JOIN public.access_contexts ac ON ac.id=$3::uuid WHERE r.id=$1::uuid RETURNING id,author_membership_id,body,created_at`,
+            [req.params.id,comment.trim(),(req as any).contextId]);
+            if(!result.rowCount)return res.status(404).json({error:'ATTENDANCE_RECORD_NOT_FOUND'});
+            const c=result.rows[0];return res.status(201).json({success:true,comment:{id:c.id,authorId:c.author_membership_id,text:c.body,timestamp:c.created_at}});
+        }catch(err:any){return res.status(403).json({error:'ATTENDANCE_COMMENT_DENIED',message:err.message})}
     });
 
     // 404 handler

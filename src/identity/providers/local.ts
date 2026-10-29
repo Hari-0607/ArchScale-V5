@@ -230,14 +230,16 @@ export class LocalProvider implements IdentityProvider {
         };
     }
 
-    async revokeSession(sessionId: string): Promise<void> {
-        const session = this.sessions.get(sessionId);
+    async revokeSession(sessionIdOrToken: string): Promise<void> {
+        const session = this.sessions.get(sessionIdOrToken) || Array.from(this.sessions.values()).find(s => s.accessToken === sessionIdOrToken);
         if (session) {
             session.isRevoked = true;
         }
     }
 
-    async revokeAllForUser(userId: string): Promise<void> {
+    async revokeAllForUser(userIdOrToken: string): Promise<void> {
+        const tokenSession = Array.from(this.sessions.values()).find(s => s.accessToken === userIdOrToken);
+        const userId = tokenSession?.userId ?? userIdOrToken;
         for (const s of this.sessions.values()) {
             if (s.userId === userId) {
                 s.isRevoked = true;

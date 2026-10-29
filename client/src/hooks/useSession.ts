@@ -14,6 +14,7 @@ export interface Principal {
 
 export interface SessionData {
   accessToken: string;
+  refreshToken?: string;
   principal: Principal;
   mfaRequired?: boolean;
   demoPersona?: { key: string; role: string; dept: string; title: string; memberId: string };
@@ -28,6 +29,9 @@ export interface ContextData {
   aal: 'aal1' | 'aal2';
   expiresAt: string;
   roleKey?: string;
+  membershipId?: string;
+  department?: string;
+  jobRole?: string;
 }
 
 export interface SessionCtx {
