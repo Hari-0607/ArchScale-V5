@@ -109,7 +109,7 @@ async function main() {
     const wsData = await wsRes.json();
     console.log(`Response HTTP ${wsRes.status}:`, JSON.stringify(redact(wsData), null, 2), '\n');
 
-    const wsId = wsData.workspaces[0].id || wsData.workspaces[0].workspace_id;
+    const wsId = wsData.workspaces[0].workspaceId || wsData.workspaces[0].workspace_id || wsData.workspaces[0].id;
 
     // 5. Context
     console.log('>>> 5. POST /api/session/context');
