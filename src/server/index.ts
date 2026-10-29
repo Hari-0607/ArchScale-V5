@@ -77,6 +77,47 @@ export function createServer(
         return res.status(200).json({ status: 'ok', name: 'ArchScale Auth Demo' });
     });
 
+    app.get('/api/demo/presets', (req: Request, res: Response) => {
+        try {
+            const testUsersPath = path.join(process.cwd(), '.local/test-users.json');
+            if (fs.existsSync(testUsersPath)) {
+                const users = JSON.parse(fs.readFileSync(testUsersPath, 'utf-8'));
+                const presets = Object.entries(users).map(([key, val]: [string, any]) => ({
+                    key,
+                    email: val.email,
+                    role: val.role,
+                    hasMfa: !!val.totpSecret
+                }));
+                return res.status(200).json({ presets });
+            }
+        } catch {}
+        return res.status(200).json({ presets: [] });
+    });
+
+    app.post('/api/demo/quick-login', async (req: Request, res: Response) => {
+        try {
+            const { key } = req.body || {};
+            const testUsersPath = path.join(process.cwd(), '.local/test-users.json');
+            if (fs.existsSync(testUsersPath)) {
+                const users = JSON.parse(fs.readFileSync(testUsersPath, 'utf-8'));
+                const user = users[key];
+                if (user) {
+                    const idp = identityProvider || getIdentityProvider();
+                    const session = await idp.signIn({ email: user.email, password: user.password });
+                    return res.status(200).json({
+                        accessToken: session.accessToken,
+                        refreshToken: session.refreshToken,
+                        principal: session.principal,
+                        mfaRequired: !!user.totpSecret
+                    });
+                }
+            }
+        } catch (err: any) {
+            return res.status(401).json({ error: err.message || 'QUICK_LOGIN_FAILED' });
+        }
+        return res.status(404).json({ error: 'USER_PRESET_NOT_FOUND' });
+    });
+
     // 1. POST /api/session/sign-in
     app.post('/api/session/sign-in', async (req: Request, res: Response) => {
         const start = Date.now();
