@@ -25,3 +25,12 @@ Items deferred from Phase 1 close-out and Phase 2 Step 2. Not started unless a l
 
 8. **MFA Enrolment and Step-Up (Phase 4)**  
    business_owner and all platform roles require aal2; the demo has a TOTP verify step; enrolment endpoints, lost-factor recovery and step-up for sensitive actions are Phase 4.
+
+9. **Shared Rate Limiter beyond DB Recovery Store (Phase 4)**  
+   Distributed shared rate limiting across multi-region server clusters beyond the database-backed `auth_rate_limits` table.
+
+10. **Account Lockout & Brute-Force Hardening (Phase 4)**  
+    Progressive account lockout and automated unlock triggers after consecutive failed authentication challenges.
+
+11. **Session Management UI (Phase 4)**  
+    Interactive Frontstage/Backstage session management UI beyond current listing and single/all session revocation endpoints.
