@@ -915,6 +915,21 @@ export function createServer(
     });
 
     // --- FRONTSTAGE (TENANT) ROUTES ---
+    // Mutable demo team fallback when database memberships aren't fully seeded
+    const team11Demo: any[] = [
+        { id: 'mem-admin', userId: 'usr-admin', name: 'Tenant Admin',      email: 'admin@studio.archscale', role_key: 'business_owner',      department: 'Management', job_role: 'Studio Owner',          status: 'ACTIVE', reporting_manager_membership_id: null },
+        { id: 'mem-dm1',   userId: 'usr-dm1',   name: 'Design Manager 1',  email: 'dm1@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'Lead Architect',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
+        { id: 'mem-jd1',   userId: 'usr-jd1',   name: 'Junior Designer 1', email: 'jd1@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: 'Junior Architect',      status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm1' },
+        { id: 'mem-dm2',   userId: 'usr-dm2',   name: 'Design Manager 2',  email: 'dm2@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'MEP Design Lead',       status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
+        { id: 'mem-jd2',   userId: 'usr-jd2',   name: 'Junior Designer 2', email: 'jd2@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: 'CAD Technician',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm2' },
+        { id: 'mem-dm3',   userId: 'usr-dm3',   name: 'Design Manager 3',  email: 'dm3@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'Landscape Design Lead', status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
+        { id: 'mem-jd3',   userId: 'usr-jd3',   name: 'Junior Designer 3', email: 'jd3@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: '3D Visualizer',         status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm3' },
+        { id: 'mem-acc-m', userId: 'usr-accm',  name: 'Accounts Manager',  email: 'accm@studio.archscale',  role_key: 'manager_coordinator',  department: 'Accounts',   job_role: 'Finance Controller',    status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
+        { id: 'mem-acc-j', userId: 'usr-accj',  name: 'Junior Accountant', email: 'accj@studio.archscale',  role_key: 'intern',               department: 'Accounts',   job_role: 'Billing Specialist',    status: 'ACTIVE', reporting_manager_membership_id: 'mem-acc-m' },
+        { id: 'mem-hr-m',  userId: 'usr-hrm',   name: 'HR Manager',        email: 'hrm@studio.archscale',   role_key: 'manager_coordinator',  department: 'HR',         job_role: 'People & Culture Lead', status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
+        { id: 'mem-hr-j',  userId: 'usr-hrj',   name: 'Junior HR',         email: 'hrj@studio.archscale',   role_key: 'intern',               department: 'HR',         job_role: 'HR Coordinator',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-hr-m' },
+    ];
+
     app.get('/api/org/members', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
@@ -959,24 +974,8 @@ export function createServer(
             jobRole: r.job_role ?? r.jobRole ?? '',
             status: r.status ?? 'ACTIVE',
             reportingManagerId: r.reporting_manager_membership_id ?? r.reportingManagerId ?? null,
-            // Flag demo-only rows so the UI can disable mutations that would hit the DB with fake UUIDs
             _demoOnly: isDemoData,
         });
-
-        // Demo fallback: shown when DB has < 11 real members (i.e. this org's memberships aren't seeded)
-        const team11Demo = [
-            { id: 'mem-admin', userId: 'usr-admin', name: 'Tenant Admin',      email: 'admin@studio.archscale', role_key: 'business_owner',      department: 'Management', job_role: 'Studio Owner',          status: 'ACTIVE', reporting_manager_membership_id: null },
-            { id: 'mem-dm1',   userId: 'usr-dm1',   name: 'Design Manager 1',  email: 'dm1@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'Lead Architect',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-            { id: 'mem-jd1',   userId: 'usr-jd1',   name: 'Junior Designer 1', email: 'jd1@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: 'Junior Architect',      status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm1' },
-            { id: 'mem-dm2',   userId: 'usr-dm2',   name: 'Design Manager 2',  email: 'dm2@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'MEP Design Lead',       status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-            { id: 'mem-jd2',   userId: 'usr-jd2',   name: 'Junior Designer 2', email: 'jd2@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: 'CAD Technician',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm2' },
-            { id: 'mem-dm3',   userId: 'usr-dm3',   name: 'Design Manager 3',  email: 'dm3@studio.archscale',   role_key: 'leader',               department: 'Design',     job_role: 'Landscape Design Lead', status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-            { id: 'mem-jd3',   userId: 'usr-jd3',   name: 'Junior Designer 3', email: 'jd3@studio.archscale',   role_key: 'intern',               department: 'Design',     job_role: '3D Visualizer',         status: 'ACTIVE', reporting_manager_membership_id: 'mem-dm3' },
-            { id: 'mem-acc-m', userId: 'usr-accm',  name: 'Accounts Manager',  email: 'accm@studio.archscale',  role_key: 'manager_coordinator',  department: 'Accounts',   job_role: 'Finance Controller',    status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-            { id: 'mem-acc-j', userId: 'usr-accj',  name: 'Junior Accountant', email: 'accj@studio.archscale',  role_key: 'intern',               department: 'Accounts',   job_role: 'Billing Specialist',    status: 'ACTIVE', reporting_manager_membership_id: 'mem-acc-m' },
-            { id: 'mem-hr-m',  userId: 'usr-hrm',   name: 'HR Manager',        email: 'hrm@studio.archscale',   role_key: 'manager_coordinator',  department: 'HR',         job_role: 'People & Culture Lead', status: 'ACTIVE', reporting_manager_membership_id: 'mem-admin' },
-            { id: 'mem-hr-j',  userId: 'usr-hrj',   name: 'Junior HR',         email: 'hrj@studio.archscale',   role_key: 'intern',               department: 'HR',         job_role: 'HR Coordinator',        status: 'ACTIVE', reporting_manager_membership_id: 'mem-hr-m' },
-        ];
 
         const useDemo = memberRows.length < 11;
         const data = useDemo
@@ -997,10 +996,13 @@ export function createServer(
             return res.status(403).json({ error: decision.reasonCode, decision });
         }
 
-        // Guard: demo-only fake IDs (non-UUID strings) cannot be mutated in the DB
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!uuidRegex.test(req.params.id)) {
-            return res.status(422).json({ error: 'DEMO_MEMBER_READ_ONLY', message: 'This member is part of the demo dataset and cannot be edited. Seed real members to enable mutations.' });
+        // Support demo IDs smoothly in memory
+        if (req.params.id.startsWith('mem-')) {
+            const member = team11Demo.find(m => m.id === req.params.id);
+            if (member) {
+                member.role_key = body.roleKey;
+                return res.status(200).json({ success: true, member });
+            }
         }
 
         try {
@@ -1021,6 +1023,16 @@ export function createServer(
         if (!decision.allow) {
             return res.status(403).json({ error: decision.reasonCode, decision });
         }
+
+        // Support demo IDs in memory
+        if (req.params.id.startsWith('mem-')) {
+            const member = team11Demo.find(m => m.id === req.params.id);
+            if (member) {
+                member.status = 'SUSPENDED';
+                return res.status(200).json({ success: true, member });
+            }
+        }
+
         try {
             await client.query(`SELECT fn_suspend_member($1::uuid, $2);`, [req.params.id, body.reason || 'Suspended by admin']);
             return res.status(200).json({ success: true });
@@ -1039,6 +1051,16 @@ export function createServer(
         if (!decision.allow) {
             return res.status(403).json({ error: decision.reasonCode, decision });
         }
+
+        // Support demo IDs in memory
+        if (req.params.id.startsWith('mem-')) {
+            const member = team11Demo.find(m => m.id === req.params.id);
+            if (member) {
+                member.status = 'ACTIVE';
+                return res.status(200).json({ success: true, member });
+            }
+        }
+
         try {
             await client.query(`SELECT fn_reactivate_member($1::uuid, $2);`, [req.params.id, body.reason || 'Reactivated']);
             return res.status(200).json({ success: true });
@@ -1318,6 +1340,15 @@ export function createServer(
 
     app.post('/api/tasks', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
+        const role = (req as any).contextRole || (principal as any).role || '';
+        // Juniors view and update permitted fields only; cannot create tasks
+        if (role === 'intern') {
+            return res.status(403).json({
+                error: 'AUTH_TASK_CREATE_DENIED',
+                message: 'Section 08: Juniors may only view and update their own assigned tasks. Task creation is restricted to Managers and Administrators.'
+            });
+        }
+
         const body = req.body || {};
         const newTask = {
             id: `tsk-${Date.now()}`,
@@ -1350,6 +1381,16 @@ export function createServer(
     });
 
     app.post('/api/tasks/:id/approve', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const role = (req as any).contextRole || (principal as any).role || '';
+        // Only managers (leader, manager_coordinator) and tenant/platform admins may approve
+        if (role === 'intern') {
+            return res.status(403).json({
+                error: 'AUTH_TASK_APPROVAL_DENIED',
+                message: 'Section 08 & 14: Only designated Managers and Administrators may approve tasks.'
+            });
+        }
+
         const task = tasksList.find(t => t.id === req.params.id);
         if (!task) return res.status(404).json({ error: 'TASK_NOT_FOUND' });
         const body = req.body || {};
