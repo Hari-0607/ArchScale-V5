@@ -727,11 +727,11 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         const UNTRUSTED_STAFF_ID = '30000000-0000-0000-0000-000000000099';
         await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, 'untrusted@platform.test') ON CONFLICT DO NOTHING;`, [UNTRUSTED_STAFF_ID]);
         await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, 'AS-UNTRUST', 'untrusted@platform.test') ON CONFLICT DO NOTHING;`, [UNTRUSTED_STAFF_ID]);
-        await adminPool.query(`INSERT INTO public.memberships (organisation_id, user_id, role_key, status)
-            VALUES ('00000000-0000-0000-0000-000000000001', $1, 'developer', 'ACTIVE') ON CONFLICT DO NOTHING;`, [UNTRUSTED_STAFF_ID]);
-
-        // Create support grant with untrusted staff membership
-        const devMemRes = await adminPool.query(`SELECT id FROM public.memberships WHERE user_id = $1;`, [UNTRUSTED_STAFF_ID]);
+        const devMemRes = await adminPool.query(`
+            INSERT INTO public.memberships (user_id, organisation_id, role_key, status)
+            VALUES ($1, $2, 'developer', 'ACTIVE')
+            RETURNING id;
+        `, [UNTRUSTED_STAFF_ID, PLATFORM_ORG_ID]);
         const devMemId = devMemRes.rows[0].id;
 
         const grantRes = await adminPool.query(`
@@ -865,13 +865,16 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
             `, [invId, newHash]);
             expect(resendRes.rows[0].fn_resend_invitation).toBe(true);
 
-            // Re-hash back to testRawToken for acceptance test
-            await adminPool.query(`UPDATE public.invitations SET token_hash = $1, status = 'Sent' WHERE id = $2;`, [tokenHash, invId]);
-
             await client.query('COMMIT;');
         } finally {
             client.release();
         }
+
+        // Re-hash back to testRawToken for acceptance test (after transaction commit)
+        await adminPool.query(`UPDATE public.invitations SET token_hash = $1, status = 'Sent' WHERE id = $2;`, [
+            (await import('crypto')).createHash('sha256').update(testRawToken).digest('hex'),
+            invId
+        ]);
 
         // 4. Accept invitation by invitee user
         const INVITEE_USER_ID = '30000000-0000-0000-0000-000000000077';
