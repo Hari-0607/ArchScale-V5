@@ -253,14 +253,17 @@ export async function decide(
         [row.role_key, routeDef.permission, row.organisation_id]
     );
 
-    if (aalRes.rowCount && aalRes.rowCount > 0) {
-        const { role_min_aal, perm_min_aal, org_min_aal } = aalRes.rows[0];
-        // Effective minimum = higher of role, permission, and (for subscriber) org setting
-        // Role or permission at aal2 can NEVER be lowered by organisation setting
-        const requiredAal = (role_min_aal === 'aal2' || perm_min_aal === 'aal2' || (row.portal === 'subscriber' && org_min_aal === 'aal2')) ? 'aal2' : 'aal1';
-        if (requiredAal === 'aal2' && row.aal !== 'aal2') {
-            return deny(8, 'AUTH_AAL', `Operation requires AAL2 (role: ${role_min_aal}, perm: ${perm_min_aal}, org: ${org_min_aal}, current: ${row.aal})`);
-        }
+    // F1: Fail closed if AAL query returns no row (e.g. permission key does not exist)
+    if (!aalRes.rowCount || aalRes.rowCount === 0) {
+        return deny(8, 'AUTH_PERMISSION', `Permission metadata not found for role '${row.role_key}' and permission '${routeDef.permission}'`);
+    }
+
+    const { role_min_aal, perm_min_aal, org_min_aal } = aalRes.rows[0];
+    // Effective minimum = higher of role, permission, and (for subscriber) org setting
+    // Role or permission at aal2 can NEVER be lowered by organisation setting
+    const requiredAal = (role_min_aal === 'aal2' || perm_min_aal === 'aal2' || (row.portal === 'subscriber' && org_min_aal === 'aal2')) ? 'aal2' : 'aal1';
+    if (requiredAal === 'aal2' && row.aal !== 'aal2') {
+        return deny(8, 'AUTH_AAL', `Operation requires AAL2 (role: ${role_min_aal}, perm: ${perm_min_aal}, org: ${org_min_aal}, current: ${row.aal})`);
     }
 
     // Final sanity check: DB is_context_valid must pass
