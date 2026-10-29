@@ -750,7 +750,87 @@ REVOKE EXECUTE ON FUNCTION fn_rate_limit_hit(TEXT, TEXT, INT, INT) FROM PUBLIC;
 GRANT  EXECUTE ON FUNCTION fn_rate_limit_hit(TEXT, TEXT, INT, INT) TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 11. Invitations Engine Definer Functions (A3)
+-- 11. Audit Logging Upgrades: Allow unauthenticated lifecycle actions
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_audit_append(
+    p_action TEXT,
+    p_target_entity TEXT,
+    p_target_id TEXT,
+    p_diff JSONB DEFAULT NULL,
+    p_user_id UUID DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_id UUID;
+    v_actor_user_id UUID;
+    v_actor_membership_id UUID;
+    v_org_id UUID;
+    v_diff_len INT;
+BEGIN
+    v_diff_len := octet_length(COALESCE(p_diff::text, ''));
+    IF v_diff_len > 2048 THEN
+        RAISE EXCEPTION 'AUTH_AUDIT_PAYLOAD_TOO_LARGE: Audit diff exceeds 2 KB limit (% bytes)', v_diff_len
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF is_context_valid() THEN
+        v_actor_user_id := fn_current_context_user_id();
+        v_actor_membership_id := fn_current_context_membership_id();
+        v_org_id := fn_current_context_org_id();
+    ELSE
+        IF p_action NOT IN (
+            'AUTH_SIGNIN_FAILED',
+            'AUTH_CONTEXT_DENIED',
+            'AUTH_TOKEN_TAMPERED',
+            'AUTH_SESSION_REVOKED',
+            'invitation.accepted',
+            'auth.recovery.requested'
+        ) THEN
+            RAISE EXCEPTION 'AUTH_AUDIT_UNAUTHORIZED: Action % is not permitted without a validated context', p_action
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        v_actor_user_id := p_user_id;
+        v_actor_membership_id := NULL;
+        v_org_id := NULL;
+    END IF;
+
+    v_id := gen_random_uuid();
+    INSERT INTO public.audit_logs (
+        id,
+        action,
+        actor_user_id,
+        actor_membership_id,
+        organisation_id,
+        target_entity,
+        target_id,
+        diff,
+        created_at
+    ) VALUES (
+        v_id,
+        p_action,
+        v_actor_user_id,
+        v_actor_membership_id,
+        v_org_id,
+        p_target_entity,
+        p_target_id,
+        p_diff,
+        now()
+    );
+
+    RETURN v_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_audit_append(TEXT, TEXT, TEXT, JSONB, UUID) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_audit_append(TEXT, TEXT, TEXT, JSONB, UUID) TO archscale_app_runtime;
+
+-- -----------------------------------------------------------------------------
+-- 12. Invitations Engine Definer Functions (A3)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_create_invitation(
     p_target_email TEXT,
