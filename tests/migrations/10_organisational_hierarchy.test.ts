@@ -137,12 +137,11 @@ beforeAll(async () => {
     // Create a support grant for staff
     const grantRes = await adminPool.query(`
         INSERT INTO public.support_access_grants (
-            staff_user_id, staff_membership_id, target_organisation_id,
-            reason, justification, requested_duration, expires_at, status
+            staff_membership_id, target_organisation_id, reason, started_at, expires_at
         ) VALUES (
-            $1, $2, $3, 'Test support', 'Verification', interval '4 hours', now() + interval '4 hours', 'ACTIVE'
+            $1, $2, 'Test support', now(), now() + interval '4 hours'
         ) RETURNING id;
-    `, [USER_STAFF_ID, staffMembershipId, ORG_A_ID]);
+    `, [staffMembershipId, ORG_A_ID]);
     supportGrantId = grantRes.rows[0].id;
 
     // Runtime Client setup
