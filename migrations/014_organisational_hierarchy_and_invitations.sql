@@ -637,22 +637,9 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION fn_list_org_invitations() FROM PUBLIC;
 GRANT  EXECUTE ON FUNCTION fn_list_org_invitations() TO archscale_app_runtime;
-        i.department,
-        i.job_role,
-        i.status,
-        i.expires_at,
-        i.sent_at
-    FROM public.invitations i
-    WHERE i.organisation_id = v_org_id
-    ORDER BY i.created_at DESC;
-END;
-$$;
-
-REVOKE EXECUTE ON FUNCTION fn_list_org_invitations() FROM PUBLIC;
-GRANT  EXECUTE ON FUNCTION fn_list_org_invitations() TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 9. Rate Limits: Atomic definer function and revoked direct runtime access
+-- 10. Rate Limits: Atomic definer function and revoked direct runtime access (F2)
 -- -----------------------------------------------------------------------------
 ALTER TABLE public.auth_rate_limits
     ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'signin',
@@ -666,7 +653,8 @@ WHERE a.ctid < b.ctid
   AND a.key = b.key
   AND COALESCE(a.action, 'signin') = COALESCE(b.action, 'signin');
 
--- Ensure primary key is (key, action)
+-- Ensure primary key is (key, action).
+-- F2: Any failure to create primary key must propagate and fail migration.
 DO $$
 BEGIN
     IF EXISTS (
@@ -675,8 +663,6 @@ BEGIN
         ALTER TABLE public.auth_rate_limits DROP CONSTRAINT auth_rate_limits_pkey;
     END IF;
     ALTER TABLE public.auth_rate_limits ADD PRIMARY KEY (key, action);
-EXCEPTION WHEN others THEN
-    NULL;
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_rate_limits_action_reset ON public.auth_rate_limits(key, action, reset_at);
@@ -758,3 +744,892 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION fn_rate_limit_hit(TEXT, TEXT, INT, INT) FROM PUBLIC;
 GRANT  EXECUTE ON FUNCTION fn_rate_limit_hit(TEXT, TEXT, INT, INT) TO archscale_app_runtime;
+
+-- -----------------------------------------------------------------------------
+-- 11. Invitations Engine Definer Functions (A3)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_create_invitation(
+    p_target_email TEXT,
+    p_target_role_key TEXT,
+    p_access_profile_id UUID DEFAULT NULL,
+    p_department TEXT DEFAULT NULL,
+    p_job_role TEXT DEFAULT NULL,
+    p_reporting_manager_membership_id UUID DEFAULT NULL,
+    p_expires_at TIMESTAMPTZ DEFAULT NULL,
+    p_token_hash TEXT DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_caller_mem_id UUID;
+    v_org_id UUID;
+    v_caller_role_key TEXT;
+    v_caller_level INT;
+    v_target_level INT;
+    v_expiry_required BOOLEAN;
+    v_expires_at TIMESTAMPTZ := p_expires_at;
+    v_inv_id UUID;
+    v_clean_email TEXT;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+
+    v_org_id := fn_current_context_org_id();
+    v_caller_mem_id := fn_current_context_membership_id();
+
+    IF NOT ('org.members.invite' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.invite'
+            USING ERRCODE = '42501';
+    END IF;
+
+    v_clean_email := lower(trim(p_target_email));
+    IF v_clean_email IS NULL OR v_clean_email = '' OR position('@' in v_clean_email) = 0 THEN
+        RAISE EXCEPTION 'Invalid target email address' USING ERRCODE = '22023';
+    END IF;
+
+    -- Approver ceiling: caller level must be strictly > target level
+    SELECT r.level, m.role_key INTO v_caller_level, v_caller_role_key
+    FROM public.memberships m
+    JOIN public.roles r ON r.key = m.role_key
+    WHERE m.id = v_caller_mem_id;
+
+    SELECT r.level, r.expiry_required INTO v_target_level, v_expiry_required
+    FROM public.roles r
+    WHERE r.key = p_target_role_key AND r.portal = 'subscriber';
+
+    IF v_target_level IS NULL THEN
+        RAISE EXCEPTION 'Invalid target subscriber role: %', p_target_role_key USING ERRCODE = 'P0002';
+    END IF;
+
+    IF v_caller_level <= v_target_level THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Approver level (%) must be strictly greater than target role level (%)',
+            v_caller_level, v_target_level USING ERRCODE = '42501';
+    END IF;
+
+    -- Expiry requirement for time-bound roles
+    IF v_expiry_required OR p_target_role_key IN ('intern', 'collaborator', 'guest') THEN
+        IF v_expires_at IS NULL THEN
+            RAISE EXCEPTION 'Target role % requires an explicit expiry date', p_target_role_key USING ERRCODE = '22023';
+        END IF;
+        IF v_expires_at <= now() THEN
+            RAISE EXCEPTION 'Expiry date must be in the future' USING ERRCODE = '22023';
+        END IF;
+    ELSE
+        IF v_expires_at IS NULL THEN
+            v_expires_at := now() + interval '7 days';
+        END IF;
+    END IF;
+
+    IF p_access_profile_id IS NOT NULL THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.access_profiles
+            WHERE id = p_access_profile_id
+              AND organisation_id = v_org_id
+              AND role_key = p_target_role_key
+        ) THEN
+            RAISE EXCEPTION 'Access profile does not match target role and organisation' USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    IF p_reporting_manager_membership_id IS NOT NULL THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.memberships
+            WHERE id = p_reporting_manager_membership_id
+              AND organisation_id = v_org_id
+              AND status = 'ACTIVE'
+        ) THEN
+            RAISE EXCEPTION 'Reporting manager must be an ACTIVE member in the same organisation' USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    INSERT INTO public.invitations (
+        email,
+        organisation_id,
+        target_role_key,
+        access_profile_id,
+        department,
+        job_role,
+        reporting_manager_membership_id,
+        invited_by_membership_id,
+        token_hash,
+        expires_at,
+        status
+    ) VALUES (
+        v_clean_email,
+        v_org_id,
+        p_target_role_key,
+        p_access_profile_id,
+        p_department,
+        p_job_role,
+        p_reporting_manager_membership_id,
+        v_caller_mem_id,
+        COALESCE(p_token_hash, encode(gen_random_bytes(32), 'hex')),
+        v_expires_at,
+        'Pending'
+    )
+    RETURNING id INTO v_inv_id;
+
+    PERFORM fn_audit_append(
+        'invitation.created',
+        'invitations',
+        v_inv_id::text,
+        jsonb_build_object(
+            'email', v_clean_email,
+            'target_role_key', p_target_role_key,
+            'department', p_department,
+            'job_role', p_job_role,
+            'expires_at', v_expires_at
+        )
+    );
+
+    RETURN v_inv_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_create_invitation(TEXT, TEXT, UUID, TEXT, TEXT, UUID, TIMESTAMPTZ, TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_create_invitation(TEXT, TEXT, UUID, TEXT, TEXT, UUID, TIMESTAMPTZ, TEXT) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_mark_invitation_sent(p_invitation_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+BEGIN
+    UPDATE public.invitations
+    SET status = 'Sent',
+        sent_at = now()
+    WHERE id = p_invitation_id AND status = 'Pending';
+
+    RETURN FOUND;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_mark_invitation_sent(UUID) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_mark_invitation_sent(UUID) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_revoke_invitation(p_invitation_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_org_id UUID;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+    v_org_id := fn_current_context_org_id();
+
+    IF NOT ('org.members.invite' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.invite'
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE public.invitations
+    SET status = 'Revoked',
+        revoked_at = now()
+    WHERE id = p_invitation_id
+      AND organisation_id = v_org_id
+      AND status IN ('Pending', 'Sent');
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Invitation not found or cannot be revoked' USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM fn_audit_append(
+        'invitation.revoked',
+        'invitations',
+        p_invitation_id::text,
+        jsonb_build_object('invitation_id', p_invitation_id)
+    );
+
+    RETURN true;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_revoke_invitation(UUID) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_revoke_invitation(UUID) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_resend_invitation(p_invitation_id UUID, p_new_token_hash TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_org_id UUID;
+    v_inv RECORD;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+    v_org_id := fn_current_context_org_id();
+
+    IF NOT ('org.members.invite' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.invite'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF NOT fn_rate_limit_hit(p_invitation_id::text, 'invite_resend', 5, 300) THEN
+        RAISE EXCEPTION 'AUTH_RATE_LIMIT_EXCEEDED: Resend rate limit exceeded for this invitation'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT * INTO v_inv
+    FROM public.invitations
+    WHERE id = p_invitation_id
+      AND organisation_id = v_org_id
+      AND status IN ('Pending', 'Sent')
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Invitation not found or cannot be resent' USING ERRCODE = 'P0002';
+    END IF;
+
+    UPDATE public.invitations
+    SET token_hash = p_new_token_hash,
+        status = 'Sent',
+        sent_at = now(),
+        resend_count = resend_count + 1
+    WHERE id = p_invitation_id;
+
+    PERFORM fn_audit_append(
+        'invitation.resent',
+        'invitations',
+        p_invitation_id::text,
+        jsonb_build_object(
+            'invitation_id', p_invitation_id,
+            'resend_count', v_inv.resend_count + 1
+        )
+    );
+
+    RETURN true;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_resend_invitation(UUID, TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_resend_invitation(UUID, TEXT) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_accept_invitation(
+    p_raw_token TEXT,
+    p_user_id UUID
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_token_hash TEXT;
+    v_inv RECORD;
+    v_user_email TEXT;
+    v_inviter_status public.membership_status;
+    v_org_status public.org_status;
+    v_request_id UUID;
+    v_membership_id UUID;
+BEGIN
+    IF p_raw_token IS NULL OR trim(p_raw_token) = '' THEN
+        RAISE EXCEPTION 'Token is required' USING ERRCODE = '22023';
+    END IF;
+
+    -- sha256 of raw_token
+    v_token_hash := encode(sha256(p_raw_token::bytea), 'hex');
+
+    SELECT * INTO v_inv
+    FROM public.invitations
+    WHERE token_hash = v_token_hash
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'AUTH_INVITATION_NOT_FOUND: Invalid invitation token' USING ERRCODE = 'P0002';
+    END IF;
+
+    IF v_inv.status <> 'Sent' THEN
+        RAISE EXCEPTION 'AUTH_INVITATION_INVALID_STATUS: Invitation status is %, cannot be accepted', v_inv.status
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_inv.revoked_at IS NOT NULL THEN
+        RAISE EXCEPTION 'AUTH_INVITATION_REVOKED: Invitation has been revoked' USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_inv.expires_at <= now() THEN
+        UPDATE public.invitations SET status = 'Expired' WHERE id = v_inv.id;
+        RAISE EXCEPTION 'AUTH_INVITATION_EXPIRED: Invitation has expired' USING ERRCODE = 'P0001';
+    END IF;
+
+    SELECT email INTO v_user_email
+    FROM public.users
+    WHERE id = p_user_id;
+
+    IF v_user_email IS NULL OR lower(v_user_email) <> lower(v_inv.email) THEN
+        RAISE EXCEPTION 'AUTH_INVITATION_EMAIL_MISMATCH: Authenticated user email does not match invitation'
+            USING ERRCODE = '42501';
+    END IF;
+
+    SELECT m.status, o.status
+    INTO v_inviter_status, v_org_status
+    FROM public.memberships m
+    JOIN public.organisations o ON o.id = m.organisation_id
+    WHERE m.id = v_inv.invited_by_membership_id;
+
+    IF v_inviter_status IS NULL OR v_inviter_status <> 'ACTIVE' THEN
+        RAISE EXCEPTION 'AUTH_INVITATION_INVITER_INACTIVE: Inviting member is no longer active'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    IF v_org_status IS NULL OR v_org_status <> 'ACTIVE' THEN
+        RAISE EXCEPTION 'AUTH_INVITATION_ORG_INACTIVE: Target organisation is not active'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    INSERT INTO public.access_requests (
+        request_type,
+        requester_user_id,
+        organisation_id,
+        target_role_key,
+        target_profile_id,
+        justification,
+        requested_duration,
+        status
+    ) VALUES (
+        'membership',
+        p_user_id,
+        v_inv.organisation_id,
+        v_inv.target_role_key,
+        v_inv.access_profile_id,
+        'Accepted invitation ' || v_inv.id::text,
+        CASE 
+            WHEN v_inv.target_role_key = 'intern' THEN interval '180 days'
+            WHEN v_inv.target_role_key = 'collaborator' THEN interval '90 days'
+            WHEN v_inv.target_role_key = 'guest' THEN interval '30 days'
+            ELSE NULL
+        END,
+        'PENDING'
+    )
+    RETURNING id INTO v_request_id;
+
+    v_membership_id := fn_approve_membership(
+        v_request_id,
+        v_inv.invited_by_membership_id,
+        'Invitation token accepted'
+    );
+
+    UPDATE public.memberships
+    SET department = v_inv.department,
+        job_role = v_inv.job_role,
+        reporting_manager_membership_id = v_inv.reporting_manager_membership_id
+    WHERE id = v_membership_id;
+
+    UPDATE public.invitations
+    SET status = 'Accepted',
+        accepted_at = now()
+    WHERE id = v_inv.id;
+
+    PERFORM fn_audit_append(
+        'invitation.accepted',
+        'invitations',
+        v_inv.id::text,
+        jsonb_build_object(
+            'invitation_id', v_inv.id,
+            'membership_id', v_membership_id,
+            'user_id', p_user_id,
+            'organisation_id', v_inv.organisation_id
+        )
+    );
+
+    RETURN v_membership_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_accept_invitation(TEXT, UUID) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_accept_invitation(TEXT, UUID) TO archscale_app_runtime;
+
+-- -----------------------------------------------------------------------------
+-- 12. Frontstage Tenant Administration Functions (A5)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_update_member_role(
+    p_target_membership_id UUID,
+    p_new_role_key TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_org_id UUID;
+    v_caller_mem_id UUID;
+    v_caller_level INT;
+    v_target_level INT;
+    v_new_level INT;
+    v_old_role TEXT;
+    v_target_user UUID;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+    v_org_id := fn_current_context_org_id();
+    v_caller_mem_id := fn_current_context_membership_id();
+
+    IF NOT ('org.members.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.manage' USING ERRCODE = '42501';
+    END IF;
+
+    SELECT r.level INTO v_caller_level
+    FROM public.memberships m JOIN public.roles r ON r.key = m.role_key
+    WHERE m.id = v_caller_mem_id;
+
+    SELECT m.role_key, r.level, m.user_id INTO v_old_role, v_target_level, v_target_user
+    FROM public.memberships m JOIN public.roles r ON r.key = m.role_key
+    WHERE m.id = p_target_membership_id AND m.organisation_id = v_org_id;
+
+    IF v_old_role IS NULL THEN
+        RAISE EXCEPTION 'Member not found in organisation' USING ERRCODE = 'P0002';
+    END IF;
+
+    SELECT level INTO v_new_level FROM public.roles WHERE key = p_new_role_key AND portal = 'subscriber';
+    IF v_new_level IS NULL THEN
+        RAISE EXCEPTION 'Invalid new role key: %', p_new_role_key USING ERRCODE = 'P0002';
+    END IF;
+
+    IF v_caller_level <= v_target_level OR v_caller_level <= v_new_level THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Cannot modify members with role level equal to or greater than caller' USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE public.memberships
+    SET role_key = p_new_role_key,
+        updated_at = now()
+    WHERE id = p_target_membership_id;
+
+    PERFORM fn_audit_append(
+        'member.role.updated',
+        'memberships',
+        p_target_membership_id::text,
+        jsonb_build_object('old_role', v_old_role, 'new_role', p_new_role_key)
+    );
+
+    RETURN true;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_update_member_role(UUID, TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_update_member_role(UUID, TEXT) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_suspend_member(
+    p_target_membership_id UUID,
+    p_reason TEXT DEFAULT 'Suspended by tenant administrator'
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_org_id UUID;
+    v_caller_mem_id UUID;
+    v_caller_level INT;
+    v_target_level INT;
+    v_target_user UUID;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+    v_org_id := fn_current_context_org_id();
+    v_caller_mem_id := fn_current_context_membership_id();
+
+    IF NOT ('org.members.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.manage' USING ERRCODE = '42501';
+    END IF;
+
+    SELECT r.level, m.user_id INTO v_target_level, v_target_user
+    FROM public.memberships m JOIN public.roles r ON r.key = m.role_key
+    WHERE m.id = p_target_membership_id AND m.organisation_id = v_org_id;
+
+    IF v_target_level IS NULL THEN
+        RAISE EXCEPTION 'Member not found in organisation' USING ERRCODE = 'P0002';
+    END IF;
+
+    SELECT r.level INTO v_caller_level
+    FROM public.memberships m JOIN public.roles r ON r.key = m.role_key
+    WHERE m.id = v_caller_mem_id;
+
+    IF v_caller_level <= v_target_level THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Cannot suspend members with role level equal to or greater than caller' USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE public.memberships
+    SET status = 'SUSPENDED',
+        updated_at = now()
+    WHERE id = p_target_membership_id;
+
+    -- Invalidate any active contexts for suspended member in this org
+    UPDATE public.access_contexts
+    SET is_valid = false
+    WHERE membership_id = p_target_membership_id;
+
+    PERFORM fn_audit_append(
+        'member.suspended',
+        'memberships',
+        p_target_membership_id::text,
+        jsonb_build_object('reason', p_reason)
+    );
+
+    RETURN true;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_suspend_member(UUID, TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_suspend_member(UUID, TEXT) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_reactivate_member(
+    p_target_membership_id UUID,
+    p_reason TEXT DEFAULT 'Reactivated by tenant administrator'
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_org_id UUID;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+    v_org_id := fn_current_context_org_id();
+
+    IF NOT ('org.members.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.manage' USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE public.memberships
+    SET status = 'ACTIVE',
+        updated_at = now()
+    WHERE id = p_target_membership_id AND organisation_id = v_org_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Member not found in organisation' USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM fn_audit_append(
+        'member.reactivated',
+        'memberships',
+        p_target_membership_id::text,
+        jsonb_build_object('reason', p_reason)
+    );
+
+    RETURN true;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_reactivate_member(UUID, TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_reactivate_member(UUID, TEXT) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_update_member_profile(
+    p_target_membership_id UUID,
+    p_new_profile_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_org_id UUID;
+    v_mem_role TEXT;
+    v_prof_role TEXT;
+    v_prof_org UUID;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+    v_org_id := fn_current_context_org_id();
+
+    IF NOT ('org.members.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.manage' USING ERRCODE = '42501';
+    END IF;
+
+    SELECT role_key INTO v_mem_role
+    FROM public.memberships
+    WHERE id = p_target_membership_id AND organisation_id = v_org_id;
+
+    IF v_mem_role IS NULL THEN
+        RAISE EXCEPTION 'Member not found in organisation' USING ERRCODE = 'P0002';
+    END IF;
+
+    IF p_new_profile_id IS NOT NULL THEN
+        SELECT role_key, organisation_id INTO v_prof_role, v_prof_org
+        FROM public.access_profiles
+        WHERE id = p_new_profile_id;
+
+        IF v_prof_org <> v_org_id OR v_prof_role <> v_mem_role THEN
+            RAISE EXCEPTION 'Access profile does not match member role and organisation' USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+
+    UPDATE public.memberships
+    SET profile_id = p_new_profile_id,
+        updated_at = now()
+    WHERE id = p_target_membership_id;
+
+    PERFORM fn_audit_append(
+        'member.profile.updated',
+        'memberships',
+        p_target_membership_id::text,
+        jsonb_build_object('profile_id', p_new_profile_id)
+    );
+
+    RETURN true;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_update_member_profile(UUID, UUID) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_update_member_profile(UUID, UUID) TO archscale_app_runtime;
+
+-- -----------------------------------------------------------------------------
+-- 13. Backstage Platform Administration Functions (A5)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_platform_create_organisation(
+    p_name TEXT,
+    p_tenant_type_key TEXT
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_org_id UUID;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+
+    IF NOT ('platform.organisations.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission platform.organisations.manage' USING ERRCODE = '42501';
+    END IF;
+
+    INSERT INTO public.organisations (
+        name,
+        portal,
+        tenant_type_key,
+        status,
+        member_min_aal
+    ) VALUES (
+        p_name,
+        'subscriber',
+        p_tenant_type_key,
+        'PENDING',
+        'aal2'
+    )
+    RETURNING id INTO v_org_id;
+
+    PERFORM fn_audit_append(
+        'platform.org.created',
+        'organisations',
+        v_org_id::text,
+        jsonb_build_object('name', p_name, 'tenant_type_key', p_tenant_type_key)
+    );
+
+    RETURN v_org_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_platform_create_organisation(TEXT, TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_platform_create_organisation(TEXT, TEXT) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_platform_suspend_organisation(
+    p_target_org_id UUID,
+    p_reason TEXT DEFAULT 'Suspended by platform administrator'
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+
+    IF NOT ('platform.organisations.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission platform.organisations.manage' USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE public.organisations
+    SET status = 'SUSPENDED',
+        updated_at = now()
+    WHERE id = p_target_org_id AND portal = 'subscriber';
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Subscriber organisation not found' USING ERRCODE = 'P0002';
+    END IF;
+
+    -- Invalidate all active contexts in target org
+    UPDATE public.access_contexts
+    SET is_valid = false
+    WHERE organisation_id = p_target_org_id;
+
+    PERFORM fn_audit_append(
+        'platform.org.suspended',
+        'organisations',
+        p_target_org_id::text,
+        jsonb_build_object('reason', p_reason)
+    );
+
+    RETURN true;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_platform_suspend_organisation(UUID, TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_platform_suspend_organisation(UUID, TEXT) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_create_support_grant(
+    p_target_org_id UUID,
+    p_reason TEXT,
+    p_hours INT DEFAULT 4
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+    v_caller_mem_id UUID;
+    v_grant_id UUID;
+    v_hours INT := LEAST(GREATEST(p_hours, 1), 24);
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+    v_caller_mem_id := fn_current_context_membership_id();
+
+    IF NOT ('platform.support.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission platform.support.manage' USING ERRCODE = '42501';
+    END IF;
+
+    INSERT INTO public.support_access_grants (
+        staff_membership_id,
+        target_organisation_id,
+        reason,
+        started_at,
+        expires_at
+    ) VALUES (
+        v_caller_mem_id,
+        p_target_org_id,
+        p_reason,
+        now(),
+        now() + (v_hours || ' hours')::interval
+    )
+    RETURNING id INTO v_grant_id;
+
+    PERFORM fn_audit_append(
+        'platform.support.grant.created',
+        'support_access_grants',
+        v_grant_id::text,
+        jsonb_build_object('target_organisation_id', p_target_org_id, 'reason', p_reason, 'duration_hours', v_hours)
+    );
+
+    RETURN v_grant_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_create_support_grant(UUID, TEXT, INT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_create_support_grant(UUID, TEXT, INT) TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_revoke_support_grant(
+    p_grant_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_ctx_id UUID;
+BEGIN
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    PERFORM fn_assert_not_support_context();
+
+    IF NOT ('platform.support.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission platform.support.manage' USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE public.support_access_grants
+    SET revoked_at = now()
+    WHERE id = p_grant_id AND revoked_at IS NULL;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Support grant not found or already revoked' USING ERRCODE = 'P0002';
+    END IF;
+
+    -- Invalidate any active context tied to this grant
+    UPDATE public.access_contexts
+    SET is_valid = false
+    WHERE support_grant_id = p_grant_id;
+
+    PERFORM fn_audit_append(
+        'platform.support.grant.revoked',
+        'support_access_grants',
+        p_grant_id::text,
+        jsonb_build_object('grant_id', p_grant_id)
+    );
+
+    RETURN true;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_revoke_support_grant(UUID) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_revoke_support_grant(UUID) TO archscale_app_runtime;
