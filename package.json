@@ -12,6 +12,8 @@
     "proof": "node demo/server.js",
     "server": "npx tsx src/server/index.ts",
     "dev:server": "npx tsx watch src/server/index.ts",
+    "build:ui": "vite build",
+    "dev:ui": "vite",
     "build": "tsc"
   },
   "keywords": [
@@ -26,6 +28,9 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
     "pg": "^8.13.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
@@ -33,6 +38,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
     "@types/express": "^5.0.6",
-    "express": "^5.3.0"
+    "express": "^5.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   }
 }
