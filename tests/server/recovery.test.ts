@@ -124,6 +124,9 @@ describe('A4 Account Flows & Password Recovery', () => {
         `, [ORG_ID]);
         const wsId = wsRes.rows[0].id;
 
+        await adminPool.query(`INSERT INTO public.app_catalogue (app_key, name) VALUES ('core_app', 'Core App') ON CONFLICT DO NOTHING;`);
+        await adminPool.query(`INSERT INTO public.organisation_entitlements (organisation_id, app_key, is_enabled) VALUES ($1, 'core_app', true) ON CONFLICT DO NOTHING;`, [ORG_ID]);
+
         await adminPool.query(`
             INSERT INTO public.memberships (user_id, organisation_id, role_key, status)
             VALUES ($1, $2, 'leader', 'ACTIVE')
