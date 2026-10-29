@@ -924,13 +924,8 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         expect(auditRes.rows[0].target_entity).toBe('invitations');
 
         // B0.2: Runtime role cannot insert an 'invitation.accepted' row through fn_audit_append without context
-        const auditRuntimePool = new pg.Pool(RUNTIME_CONFIG);
-        try {
-            await expect(auditRuntimePool.query(
-                `SELECT fn_audit_append('invitation.accepted'::text, 'invitations'::text, 'forged-id'::text, NULL::jsonb, NULL::uuid);`
-            )).rejects.toThrow(/AUTH_AUDIT_UNAUTHORIZED/i);
-        } finally {
-            await auditRuntimePool.end();
-        }
+        await expect(runtimePool.query(
+            `SELECT fn_audit_append('invitation.accepted', 'invitations', 'forged-id');`
+        )).rejects.toThrow(/AUTH_AUDIT_UNAUTHORIZED/i);
     });
 });
