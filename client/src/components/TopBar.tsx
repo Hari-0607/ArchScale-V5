@@ -152,3 +152,4 @@ export const TopBar: React.FC<TopBarProps> = ({ session, context, onLogout, onSw
     </header>
   );
 };
+

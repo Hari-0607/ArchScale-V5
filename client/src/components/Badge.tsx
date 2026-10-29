@@ -40,3 +40,4 @@ export function statusVariant(status: string): BadgeVariant {
   if (['info', 'aal2', 'platform'].includes(s)) return 'info';
   return 'neutral';
 }
+

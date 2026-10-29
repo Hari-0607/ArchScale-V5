@@ -225,3 +225,4 @@ const CARD: React.CSSProperties = {
   width: '100%',
   boxShadow: 'var(--shadow-sm)',
 };
+

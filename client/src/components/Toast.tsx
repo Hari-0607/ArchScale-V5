@@ -65,3 +65,4 @@ export const ToastList: React.FC<ToastListProps> = ({ toasts, onRemove }) => (
     ))}
   </div>
 );
+

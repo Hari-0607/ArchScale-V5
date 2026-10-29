@@ -18,3 +18,4 @@ export const Spinner: React.FC<{ size?: number; color?: string }> = ({ size = 18
     />
   </svg>
 );
+

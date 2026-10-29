@@ -39,3 +39,4 @@ export function useForm<T extends Record<string, unknown>>(initial: T, rules?: R
 
   return { values, errors, submitting, setSubmitting, dirty, set, validate, reset, setValues };
 }
+

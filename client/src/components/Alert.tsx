@@ -31,3 +31,4 @@ export const Alert: React.FC<AlertProps> = ({ kind = 'error', children, style })
     {children}
   </div>
 );
+

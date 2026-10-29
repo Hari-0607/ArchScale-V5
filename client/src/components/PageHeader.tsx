@@ -28,3 +28,4 @@ export const PageHeader: React.FC<PageHeaderProps> = ({ title, subtitle, actions
     {actions && <div style={{ flexShrink: 0, display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>{actions}</div>}
   </div>
 );
+
