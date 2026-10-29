@@ -490,6 +490,7 @@ BEGIN
         organisation_id,
         target_role_key,
         target_profile_id,
+        requested_apps,
         justification,
         requested_duration,
         status
@@ -499,6 +500,7 @@ BEGIN
         v_inv.organisation_id,
         v_inv.target_role_key,
         v_inv.access_profile_id,
+        ARRAY(SELECT app_key FROM public.organisation_entitlements WHERE organisation_id = v_inv.organisation_id AND is_enabled = true),
         'Accepted invitation ' || v_inv.id::text,
         v_requested_duration,
         'PENDING'
