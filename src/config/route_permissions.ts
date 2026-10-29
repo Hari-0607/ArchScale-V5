@@ -26,6 +26,11 @@ export const SERVER_ROUTES: Record<string, ServerRouteDef> = {
         method: 'POST',
         kind: 'public'
     },
+    'public.recovery': {
+        path: '/api/session/recovery',
+        method: 'POST',
+        kind: 'public'
+    },
 
     // 2. Pre-context session endpoints (require verified identity token)
     'session.mfa.verify': {

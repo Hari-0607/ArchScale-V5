@@ -34,3 +34,6 @@ Items deferred from Phase 1 close-out and Phase 2 Step 2. Not started unless a l
 
 11. **Session Management UI (Phase 4)**  
     Interactive Frontstage/Backstage session management UI beyond current listing and single/all session revocation endpoints.
+
+12. **Rate-limit key chosen by caller**  
+    Currently `fn_rate_limit_hit` takes `p_key` supplied by caller. Caller-chosen keys should be scoped, sanitized, or prefixed to prevent cross-action key collisions.
