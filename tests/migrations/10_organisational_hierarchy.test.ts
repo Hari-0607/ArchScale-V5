@@ -81,10 +81,6 @@ let supportGrantId: string;
 beforeAll(async () => {
     adminPool = await createIsolatedTestDatabase('archscale_test_014');
 
-    // Apply migration 014
-    const m14Sql = fs.readFileSync(path.join(__dirname, '../../migrations/014_organisational_hierarchy_and_invitations.sql'), 'utf-8');
-    await adminPool.query(m14Sql);
-
     // Seed auth.users & mirror
     const testUsers = [
         [USER_OWNER_ID, 'owner@studio.test', 'AS-OWNER01'],
