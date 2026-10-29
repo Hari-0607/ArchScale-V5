@@ -754,11 +754,16 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
             await expect(badClient.query(`SELECT * FROM fn_list_org_members();`))
                 .rejects.toThrow(/AUTH_PERMISSION_DENIED: Support context requires platform.support.read/i);
 
+            await badClient.query('ROLLBACK;').catch(() => {});
+            await badClient.query('BEGIN;');
+            await badClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [badSupCtxId, UNTRUSTED_STAFF_ID, 'sess_bad_staff']);
+
             await expect(badClient.query(`SELECT * FROM fn_list_org_invitations();`))
                 .rejects.toThrow(/AUTH_PERMISSION_DENIED: Support context requires platform.support.read/i);
 
-            await badClient.query('ROLLBACK;');
+            await badClient.query('ROLLBACK;').catch(() => {});
         } finally {
+            await badClient.query('ROLLBACK;').catch(() => {});
             badClient.release();
         }
     });
