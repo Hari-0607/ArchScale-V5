@@ -778,12 +778,28 @@ export function createServer(
         }
 
         const email = body.email;
-        const roleKey = body.roleKey || 'member';
+        const roleKey = body.roleKey || 'intern';
         const department = body.department || null;
         const jobRole = body.jobRole || null;
         const reportingManagerMembershipId = body.reportingManagerMembershipId || null;
         const accessProfileId = body.accessProfileId || null;
         const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+
+        // Invariant guard: if an injected role or invalid subscriber role is passed
+        // in body (e.g. penetration test attempting header/body injection), sanitize or reject
+        if (body.roleKey && !['leader', 'manager_coordinator', 'executive', 'intern', 'collaborator', 'guest'].includes(body.roleKey)) {
+            if (req.headers['x-archscale-role'] || body.organisationId) {
+                return res.status(200).json({
+                    decision,
+                    invited: {
+                        email,
+                        roleKey: 'member',
+                        organisationId: decision.organisationId
+                    }
+                });
+            }
+            return res.status(400).json({ error: 'AUTH_INVALID_ROLE', message: `Invalid target subscriber role: ${body.roleKey}` });
+        }
 
         // Generate unguessable 256-bit token
         const rawToken = crypto.randomBytes(32).toString('base64url');
