@@ -7,11 +7,21 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
 
     beforeAll(async () => {
         pool = await createIsolatedTestDatabase('test_db_01');
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
+});
 
     afterAll(async () => {
         await pool.end();
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
+});
 
     it('enforces exactly ONE platform organisation via partial unique index', async () => {
         const result = await pool.query<{ count: string }>(
@@ -25,7 +35,12 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
                 "INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('Rogue Platform Org', 'platform', NULL, 'ACTIVE');"
             )
         ).rejects.toThrow(/idx_single_platform_org/);
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
+});
 
     it('enforces organisations.tenant_type_key is NULL iff portal = platform', async () => {
         // Platform org cannot have a tenant_type_key
@@ -47,7 +62,12 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
             "INSERT INTO organisations (name, portal, tenant_type_key, status) VALUES ('Studio A', 'subscriber', 'studio_owner', 'ACTIVE') RETURNING id;"
         );
         expect(insertSub.rows.length).toBe(1);
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
+});
 
     it('enforces users table as an identity mirror with NO roles/tenants and unique user_code', async () => {
         const user1 = await pool.query<{ id: string }>(
@@ -64,7 +84,12 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
         await expect(
             pool.query("INSERT INTO users (user_code, email) VALUES ('USR-002', 'user1@archscale.test');")
         ).rejects.toThrow(/users_email_key/);
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
+});
 
     it('enforces seat accounting invariant: allocated_seats <= seat_limit', async () => {
         await pool.query(
@@ -88,7 +113,12 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
                 `UPDATE organisation_seats SET allocated_seats = 6 WHERE organisation_id = '${orgId}' AND app_key = 'app_canvas';`
             )
         ).rejects.toThrow(/chk_seats_allocated_lte_limit/);
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
+});
 
     it('enforces access_contexts 24-hour lifetime hard check', async () => {
         const user = (await pool.query<{ id: string }>(
@@ -122,7 +152,12 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
                  VALUES ('${user}', 'sess_invalid', '${org}', '${workspace}', '${membership}', now() + interval '25 hours');`
             )
         ).rejects.toThrow(/chk_context_max_24h/);
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
+});
 
     it('evaluates is_context_valid correctly across org and membership states', async () => {
         const user = (await pool.query<{ id: string }>(
@@ -179,7 +214,12 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
             `SELECT is_context_valid('${context}') as is_context_valid;`
         );
         expect(checkOrgSuspended.rows[0].is_context_valid).toBe(false);
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
+});
 
     it('enforces share_grants num_nonnulls(target_org_id, target_user_id) = 1', async () => {
         const user = (await pool.query<{ id: string }>(
@@ -220,5 +260,15 @@ describe('01_schema_and_types: Core Schema & Invariants on Real PostgreSQL', () 
                  VALUES ('${org1}', NULL, NULL, 'project', 'PRJ-103', '${grantor}', now() + interval '7 days');`
             )
         ).rejects.toThrow(/chk_share_grant_target_one/);
+        it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+    });
+});
+    it('seeds/002_phase2_permissions.sql is idempotent (can be applied twice with no error)', async () => {
+        const seedSql = fs.readFileSync(path.join(__dirname, '../../seeds/002_phase2_permissions.sql'), 'utf-8');
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
+        await expect(pool.query(seedSql)).resolves.toBeDefined();
     });
 });
