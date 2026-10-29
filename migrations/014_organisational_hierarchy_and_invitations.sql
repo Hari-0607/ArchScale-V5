@@ -285,16 +285,11 @@ CREATE POLICY memberships_hierarchy_read_policy ON public.memberships
         organisation_id = fn_current_context_org_id()
     );
 
--- Rate limits table for database-backed rate limiting (A4)
-CREATE TABLE IF NOT EXISTS public.auth_rate_limits (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    key TEXT NOT NULL,
-    action TEXT NOT NULL,
-    attempts INT NOT NULL DEFAULT 1,
-    window_start TIMESTAMPTZ NOT NULL DEFAULT now(),
-    reset_at TIMESTAMPTZ NOT NULL,
-    CONSTRAINT uq_rate_limit_key_action UNIQUE (key, action)
-);
+-- Rate limits table additions for auth rate limits (key, action, counter, reset_at)
+ALTER TABLE public.auth_rate_limits
+    ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'signin',
+    ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS reset_at TIMESTAMPTZ DEFAULT (now() + interval '15 minutes');
 
-CREATE INDEX IF NOT EXISTS idx_rate_limits_reset ON public.auth_rate_limits(reset_at);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_action_reset ON public.auth_rate_limits(key, action, reset_at);
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.auth_rate_limits TO archscale_app_runtime;
