@@ -9,11 +9,26 @@ import { FormField, TextInput, SelectInput, TextareaInput } from '../../componen
 import { useToast } from '../../hooks/useToast';
 import { ToastList } from '../../components/Toast';
 import { useForm } from '../../hooks/useForm';
+import { useSession } from '../../hooks/useSession';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const PRIORITIES = ['Low', 'Normal', 'High', 'Urgent'];
 const STATUSES = ['To Do', 'In Progress', 'In Review', 'Completed'];
+
+const TEAM_MEMBERS = [
+  { id: 'lead-01', name: 'Design Manager 1 (Lead Architect)', dept: 'Design' },
+  { id: 'des-01',  name: 'Junior Designer 1 (Junior Architect)', dept: 'Design' },
+  { id: 'lead-02', name: 'Design Manager 2 (MEP Design Lead)', dept: 'Design' },
+  { id: 'des-02',  name: 'Junior Designer 2 (CAD Technician)', dept: 'Design' },
+  { id: 'lead-03', name: 'Design Manager 3 (Landscape Design Lead)', dept: 'Design' },
+  { id: 'des-03',  name: 'Junior Designer 3 (3D Visualizer)', dept: 'Design' },
+  { id: 'acc-01',  name: 'Accounts Manager (Finance Controller)', dept: 'Accounts' },
+  { id: 'acc-02',  name: 'Junior Accountant (Billing Specialist)', dept: 'Accounts' },
+  { id: 'hr-01',   name: 'HR Manager (People & Culture Lead)', dept: 'HR' },
+  { id: 'hr-02',   name: 'Junior HR (HR Coordinator)', dept: 'HR' },
+  { id: 'mem-01',  name: 'Tenant Admin (Studio Owner)', dept: 'Management' },
+];
 
 interface TaskForm {
   title: string;
@@ -27,11 +42,18 @@ interface TaskForm {
 }
 
 const INITIAL: TaskForm = {
-  title: '', description: '', assignedToId: '', department: '', reviewerId: '',
-  startDate: '', dueDateTime: '', priority: 'Normal',
+  title: '',
+  description: '',
+  assignedToId: 'des-01',
+  department: 'Design',
+  reviewerId: 'lead-01',
+  startDate: '',
+  dueDateTime: '',
+  priority: 'Normal',
 };
 
 export const TasksPage: React.FC = () => {
+  const { session } = useSession();
   const { toasts, addToast, removeToast } = useToast();
   const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,8 +61,22 @@ export const TasksPage: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
 
+  // RBAC resolution
+  const activeRole = session?.demoPersona?.role ?? session?.principal.role;
+  const activeDept = session?.demoPersona?.dept ?? (session?.principal as any)?.department;
+  const activeMemberId = session?.demoPersona?.memberId ?? session?.principal.id;
+
+  const isJunior = activeRole === 'intern';
+  const isManager = activeRole === 'leader' || activeRole === 'manager_coordinator';
+  const isTenantAdmin = activeRole === 'business_owner' || activeRole === 'founder';
+  const canCreateTask = isTenantAdmin || isManager;
+
   const { values, errors, set, validate, reset, submitting, setSubmitting, dirty } = useForm<TaskForm>(
-    INITIAL,
+    {
+      ...INITIAL,
+      department: activeDept || 'Design',
+      reviewerId: activeMemberId || 'mem-01',
+    },
     { title: v => (!v || String(v).trim().length < 3) ? 'Title required (min 3 chars)' : null }
   );
 
@@ -58,10 +94,15 @@ export const TasksPage: React.FC = () => {
   const handleCreate = async () => {
     if (!validate()) return;
     setSubmitting(true);
-    const res = await createTask(values);
+    const assignedMember = TEAM_MEMBERS.find(m => m.id === values.assignedToId);
+    const res = await createTask({
+      ...values,
+      assignedToName: assignedMember ? assignedMember.name.split(' (')[0] : 'Assigned Member',
+      reviewerName: session?.demoPersona?.title || 'Reviewer',
+    });
     setSubmitting(false);
     if (!res.ok) { addToast('error', res.message); return; }
-    addToast('success', 'Task created');
+    addToast('success', 'Task created successfully');
     reset();
     setDrawerOpen(false);
     load();
@@ -83,17 +124,25 @@ export const TasksPage: React.FC = () => {
     load();
   };
 
+  const getScopeSubtitle = () => {
+    if (isTenantAdmin) return 'All Tenant Tasks — Full management & approval authority';
+    if (activeDept === 'Design' && isManager) return 'Design Department (Section 09 Cross-Team View Active — all 3 design teams visible)';
+    if (activeDept === 'Design' && isJunior) return 'My Assigned Design Tasks (Section 08 — Peer tasks restricted)';
+    if (isManager) return `${activeDept} Department Tasks — Manager view & approval`;
+    return 'My Assigned Tasks — Status update permitted';
+  };
+
   const columns: Column<any>[] = [
-    { key: 'workId', label: 'ID', width: 80 },
-    { key: 'title', label: 'Title', sortable: true, width: 200 },
+    { key: 'workId', label: 'Work ID', width: 90 },
+    { key: 'title', label: 'Title', sortable: true, width: 220 },
     { key: 'assignedToName', label: 'Assigned To', width: 140 },
-    { key: 'department', label: 'Dept', width: 100 },
+    { key: 'department', label: 'Dept', width: 90 },
     { key: 'priority', label: 'Priority', width: 80, render: row => {
       const v = row.priority === 'Urgent' ? 'error' : row.priority === 'High' ? 'warning' : 'neutral';
       return <Badge variant={v as any}>{row.priority}</Badge>;
     }},
     { key: 'status', label: 'Status', width: 110, render: row => <Badge variant={statusVariant(row.status)}>{row.status}</Badge> },
-    { key: 'dueDateTime', label: 'Due', width: 120, render: row =>
+    { key: 'dueDateTime', label: 'Due', width: 110, render: row =>
         row.dueDateTime ? new Date(row.dueDateTime).toLocaleDateString() : '—'
     },
     { key: 'approvalStatus', label: 'Approval', width: 100, render: row =>
@@ -107,10 +156,23 @@ export const TasksPage: React.FC = () => {
     <div className="page-body">
       <ToastList toasts={toasts} onRemove={removeToast} />
       <PageHeader
-        title="Tasks"
-        subtitle="Track and manage work items"
-        actions={<Button onClick={() => { reset(); setDrawerOpen(true); }}>New Task</Button>}
+        title="Tasks Application"
+        subtitle={getScopeSubtitle()}
+        actions={canCreateTask ? <Button onClick={() => { reset(); setDrawerOpen(true); }}>New Task</Button> : undefined}
       />
+
+      {/* RBAC Info Ribbon */}
+      {isJunior && (
+        <div style={{ padding: '8px 14px', background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius)', marginBottom: 'var(--sp-4)', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+          📋 <strong>Junior Scope (Section 08):</strong> You can view and update the progress of your assigned work items. Peer team items and creation privileges are restricted.
+        </div>
+      )}
+
+      {activeDept === 'Design' && isManager && (
+        <div style={{ padding: '8px 14px', background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius)', marginBottom: 'var(--sp-4)', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+          🔍 <strong>Design Manager Cross-Team Visibility (Section 09):</strong> You have read access across all 3 Design sub-teams. Peer reassignments require explicit delegation.
+        </div>
+      )}
 
       <DataTable
         columns={columns}
@@ -118,44 +180,64 @@ export const TasksPage: React.FC = () => {
         loading={loading}
         error={error ?? undefined}
         onRetry={load}
-        searchKeys={['title', 'assignedToName', 'department']}
-        emptyTitle="No tasks"
-        emptySubtitle="Create your first task to get started"
-        emptyAction={<Button onClick={() => setDrawerOpen(true)}>New Task</Button>}
-        rowActions={row => (
-          <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-            {row.status !== 'Completed' && (
-              <SelectInput
-                value={row.status}
-                onChange={e => handleStatusUpdate(row.id, e.target.value)}
-                disabled={statusUpdating === row.id}
-                style={{ height: 26, fontSize: 'var(--font-size-xs)', padding: '0 6px', width: 110 }}
-              >
-                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-              </SelectInput>
-            )}
-            {row.approvalStatus === 'Pending' && (
-              <>
-                <Button variant="secondary" size="sm" onClick={() => handleApprove(row.id, 'Approved')}>✓</Button>
-                <Button variant="danger" size="sm" onClick={() => handleApprove(row.id, 'Rejected')}>✗</Button>
-              </>
-            )}
-          </div>
-        )}
+        searchKeys={['title', 'assignedToName', 'department', 'workId']}
+        emptyTitle="No tasks visible"
+        emptySubtitle={isJunior ? "No tasks currently assigned to you" : "No tasks found for your access scope"}
+        emptyAction={canCreateTask ? <Button onClick={() => setDrawerOpen(true)}>New Task</Button> : undefined}
+        rowActions={row => {
+          const isOwnAssigned = row.assignedToId === activeMemberId || row.assignedToId === session?.principal.id;
+          const isPeerDesign = activeDept === 'Design' && isManager && !isOwnAssigned && row.reviewerId !== activeMemberId;
+
+          // Juniors can only update status on their own task
+          const canUpdateStatus = isTenantAdmin || (isManager && !isPeerDesign) || (isJunior && isOwnAssigned);
+          // Only managers and admins can approve tasks
+          const canApprove = (isTenantAdmin || isManager) && (row.reviewerId === activeMemberId || isTenantAdmin);
+
+          if (isPeerDesign) {
+            return (
+              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-subtle)', fontStyle: 'italic', paddingRight: 6 }}>
+                Peer Read (§09)
+              </span>
+            );
+          }
+
+          return (
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center' }}>
+              {canUpdateStatus && row.status !== 'Completed' && (
+                <SelectInput
+                  value={row.status}
+                  onChange={e => handleStatusUpdate(row.id, e.target.value)}
+                  disabled={statusUpdating === row.id}
+                  style={{ height: 26, fontSize: 'var(--font-size-xs)', padding: '0 6px', width: 110 }}
+                >
+                  {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                </SelectInput>
+              )}
+
+              {canApprove && row.approvalStatus === 'Pending' && (
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <Button variant="secondary" size="sm" onClick={() => handleApprove(row.id, 'Approved')} title="Approve Task">✓ Approve</Button>
+                  <Button variant="danger" size="sm" onClick={() => handleApprove(row.id, 'Rejected')} title="Reject Task">✗</Button>
+                </div>
+              )}
+            </div>
+          );
+        }}
       />
 
+      {/* Create Task Drawer */}
       <Drawer
         open={drawerOpen}
-        title="New Task"
+        title="Create Work Task"
         onClose={() => { reset(); setDrawerOpen(false); }}
         onSave={handleCreate}
         saving={submitting}
         saveLabel="Create Task"
         dirty={dirty}
       >
-        <FormField label="Title" required error={errors.title}>
+        <FormField label="Task Title" required error={errors.title}>
           <TextInput
-            placeholder="Task title"
+            placeholder="e.g. Detailed Wall Section Specification"
             value={values.title}
             onChange={e => set('title', e.target.value)}
             hasError={!!errors.title}
@@ -164,14 +246,39 @@ export const TasksPage: React.FC = () => {
         </FormField>
         <FormField label="Description">
           <TextareaInput
-            placeholder="Optional details"
+            placeholder="Technical details and deliverables"
             value={values.description}
             onChange={e => set('description', e.target.value)}
           />
         </FormField>
+
+        {/* Section 08: Searchable Assigned To dropdown of the 11 members */}
+        <FormField label="Assigned To (11 Team Members)" required>
+          <SelectInput
+            value={values.assignedToId}
+            onChange={e => {
+              const selectedMember = TEAM_MEMBERS.find(m => m.id === e.target.value);
+              set('assignedToId', e.target.value);
+              if (selectedMember) {
+                set('department', selectedMember.dept);
+              }
+            }}
+          >
+            {TEAM_MEMBERS.map(m => (
+              <option key={m.id} value={m.id}>
+                {m.name} — {m.dept} Dept
+              </option>
+            ))}
+          </SelectInput>
+        </FormField>
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-4)' }}>
           <FormField label="Department">
-            <TextInput placeholder="e.g. Design" value={values.department} onChange={e => set('department', e.target.value)} />
+            <TextInput
+              placeholder="e.g. Design"
+              value={values.department}
+              onChange={e => set('department', e.target.value)}
+            />
           </FormField>
           <FormField label="Priority">
             <SelectInput value={values.priority} onChange={e => set('priority', e.target.value)}>
@@ -189,4 +296,3 @@ export const TasksPage: React.FC = () => {
     </div>
   );
 };
-

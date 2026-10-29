@@ -23,7 +23,11 @@ export const TopBar: React.FC<TopBarProps> = ({ session, context, onLogout, onSw
     return () => document.removeEventListener('mousedown', h);
   }, [menuOpen]);
 
-  const initial = session?.principal.email?.[0]?.toUpperCase() ?? '?';
+  const persona = session?.demoPersona;
+  const displayName = persona?.title || session?.principal.email || 'User';
+  const displayRole = persona?.role || session?.principal.role || 'member';
+  const displayDept = persona?.dept || (session?.principal as any)?.department || '';
+  const initial = displayName[0]?.toUpperCase() ?? '?';
 
   return (
     <header style={{
@@ -50,11 +54,6 @@ export const TopBar: React.FC<TopBarProps> = ({ session, context, onLogout, onSw
             <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {context.workspaceName ?? 'Workspace'}
             </span>
-            {context.roleKey && (
-              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-subtle)', flexShrink: 0, padding: '2px 6px', background: 'var(--color-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
-                {context.roleKey}
-              </span>
-            )}
             <button
               onClick={onSwitchContext}
               style={{ background: 'none', border: '1px solid var(--color-border)', borderRadius: 'var(--radius)', padding: '3px 8px', fontSize: 'var(--font-size-xs)', cursor: 'pointer', color: 'var(--color-text-muted)', flexShrink: 0 }}
@@ -64,9 +63,21 @@ export const TopBar: React.FC<TopBarProps> = ({ session, context, onLogout, onSw
           </>
         ) : (
           <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
-            No workspace selected
+            Platform Backstage Context
           </span>
         )}
+      </div>
+
+      {/* User Persona & Role Badge */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {displayDept && (
+          <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', padding: '2px 8px', background: 'var(--color-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
+            {displayDept}
+          </span>
+        )}
+        <span style={{ fontSize: 'var(--font-size-xs)', fontWeight: 600, color: 'var(--color-accent)', padding: '2px 8px', background: 'var(--color-accent-light)', borderRadius: 'var(--radius-sm)' }}>
+          {displayRole}
+        </span>
       </div>
 
       {/* User menu */}
@@ -101,8 +112,8 @@ export const TopBar: React.FC<TopBarProps> = ({ session, context, onLogout, onSw
             }}>
               {initial}
             </span>
-            <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {session.principal.email}
+            <span style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+              {displayName}
             </span>
             <span style={{ opacity: 0.5, fontSize: 10 }}>▾</span>
           </button>
@@ -117,17 +128,20 @@ export const TopBar: React.FC<TopBarProps> = ({ session, context, onLogout, onSw
                 border: '1px solid var(--color-border)',
                 borderRadius: 'var(--radius-md)',
                 boxShadow: 'var(--shadow-md)',
-                minWidth: 200,
+                minWidth: 220,
                 zIndex: 200,
               }}
               onClick={() => setMenuOpen(false)}
             >
               <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--color-border)' }}>
-                <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600, color: 'var(--color-text)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {session.principal.email}
+                <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600, color: 'var(--color-text)', marginBottom: 2 }}>
+                  {displayName}
                 </div>
                 <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
-                  AAL: {session.principal.aal?.toUpperCase()}
+                  {session.principal.email}
+                </div>
+                <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-subtle)', marginTop: 4 }}>
+                  MFA Status: {session.principal.aal?.toUpperCase()}
                 </div>
               </div>
               <button
@@ -152,4 +166,3 @@ export const TopBar: React.FC<TopBarProps> = ({ session, context, onLogout, onSw
     </header>
   );
 };
-
