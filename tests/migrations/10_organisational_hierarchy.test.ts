@@ -914,5 +914,26 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         // Accepting a second time fails because status is Accepted
         await expect(adminPool.query(`SELECT fn_accept_invitation($1, $2::uuid);`, [testRawToken, INVITEE_USER_ID]))
             .rejects.toThrow(/AUTH_INVITATION_INVALID_STATUS/i);
+
+        // B0.2: Audit entry exists with correct organisation_id and actor
+        const auditRes = await adminPool.query(`
+            SELECT action, actor_user_id, organisation_id, target_entity, target_id
+            FROM public.audit_logs
+            WHERE action = 'invitation.accepted' AND target_id = $1::text;
+        `, [invId]);
+        expect(auditRes.rows.length).toBe(1);
+        expect(auditRes.rows[0].actor_user_id).toBe(INVITEE_USER_ID);
+        expect(auditRes.rows[0].organisation_id).toBe(ORG_A_ID);
+        expect(auditRes.rows[0].target_entity).toBe('invitations');
+
+        // B0.2: Runtime role cannot insert an 'invitation.accepted' row through fn_audit_append without context
+        const runtimePool = new pg.Pool(RUNTIME_CONFIG);
+        try {
+            await expect(runtimePool.query(
+                `SELECT fn_audit_append('invitation.accepted', 'invitations', 'forged-id');`
+            )).rejects.toThrow(/AUTH_AUDIT_UNAUTHORIZED/i);
+        } finally {
+            await runtimePool.end();
+        }
     });
 });

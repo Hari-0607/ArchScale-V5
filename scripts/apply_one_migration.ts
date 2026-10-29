@@ -106,11 +106,80 @@ async function main() {
 
         console.log('[2/3] All SQL files executed. Running read-only post-checks...');
 
+        const anyHas015 = resolvedFilePaths.some(p => path.basename(p).includes('015'));
         const anyHas014 = resolvedFilePaths.some(p => path.basename(p).includes('014'));
         const anyHas013 = resolvedFilePaths.some(p => path.basename(p).includes('013'));
         const anyHas012 = resolvedFilePaths.some(p => path.basename(p).includes('012'));
 
-        if (anyHas014) {
+        if (anyHas015) {
+            console.log('Running specialized post-checks for Migration 015:');
+
+            // Check 1: Schema columns for expiry split
+            const colCheck = await client.query(`
+                SELECT
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invitations' AND column_name = 'invitation_expires_at') AS has_inv_expires,
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invitations' AND column_name = 'membership_expires_at') AS has_mem_expires;
+            `);
+            const cr = colCheck.rows[0];
+            if (!cr.has_inv_expires) throw new Error('Post-check 015 failed: invitations.invitation_expires_at missing');
+            if (!cr.has_mem_expires) throw new Error('Post-check 015 failed: invitations.membership_expires_at missing');
+            console.log('  ✓ invitations expiry split columns (invitation_expires_at, membership_expires_at) verified.');
+
+            // Check 2: Functions exist
+            const funcs015 = [
+                'fn_mark_invitation_expired',
+                'fn_create_invitation',
+                'fn_accept_invitation',
+                'fn_list_org_invitations',
+                'fn_platform_approve_organisation',
+                'fn_platform_invite_tenant_admin',
+                'fn_list_org_support_grants'
+            ];
+            const funcRes = await client.query(`
+                SELECT p.proname 
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public' AND p.proname = ANY($1::text[]);
+            `, [funcs015]);
+            const found015 = new Set(funcRes.rows.map(r => r.proname));
+            for (const f of funcs015) {
+                if (!found015.has(f)) throw new Error(`Post-check 015 failed: function ${f} missing from database!`);
+            }
+            console.log(`  ✓ All ${funcs015.length} Migration 015 functions exist.`);
+
+            // Check 3: Check fn_audit_append allowlist reverted (no context call with 'invitation.accepted' fails)
+            try {
+                await client.query(`SELECT fn_audit_append('invitation.accepted', 'invitations', 'test');`);
+                throw new Error('Post-check 015 failed: fn_audit_append still allows unauthenticated invitation.accepted!');
+            } catch (err: any) {
+                if (err.message.includes('AUTH_AUDIT_UNAUTHORIZED')) {
+                    console.log('  ✓ fn_audit_append no-context allowlist is strictly reverted.');
+                } else {
+                    throw err;
+                }
+            }
+
+            // Check 4 (B0.9): Check ARCHSCALE_TEST_INVITE_EMAIL
+            const testInviteEmail = process.env.ARCHSCALE_TEST_INVITE_EMAIL;
+            if (testInviteEmail) {
+                console.log(`  [B0.9] ARCHSCALE_TEST_INVITE_EMAIL present: sending ONE real invitation via Supabase...`);
+                const { sendInvitationMail } = await import('../src/mail/sink.js');
+                const rawToken = (await import('crypto')).randomBytes(32).toString('base64url');
+                const result = await sendInvitationMail({
+                    to: testInviteEmail,
+                    rawToken,
+                    organisationName: 'ArchScale Staging'
+                });
+                if (result.success) {
+                    console.log('  ✓ Real invitation dispatched. Status: Sent');
+                } else {
+                    throw new Error('Post-check 015 failed to send real invite email');
+                }
+            } else {
+                console.log('  ✓ ARCHSCALE_TEST_INVITE_EMAIL is not set in environment (present: false). Real invite send skipped.');
+            }
+
+        } else if (anyHas014) {
             console.log('Running specialized post-checks for Migration 014:');
 
             // Check 1: Schema columns
