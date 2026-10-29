@@ -500,7 +500,16 @@ BEGIN
         v_inv.organisation_id,
         v_inv.target_role_key,
         v_inv.access_profile_id,
-        ARRAY(SELECT app_key FROM public.organisation_entitlements WHERE organisation_id = v_inv.organisation_id AND is_enabled = true),
+        ARRAY(
+            SELECT s.app_key
+            FROM public.organisation_seats s
+            JOIN public.organisation_entitlements e 
+              ON e.organisation_id = s.organisation_id 
+             AND e.app_key = s.app_key 
+             AND e.is_enabled = true
+            WHERE s.organisation_id = v_inv.organisation_id
+              AND s.role_key = v_inv.target_role_key
+        ),
         'Accepted invitation ' || v_inv.id::text,
         v_requested_duration,
         'PENDING'
