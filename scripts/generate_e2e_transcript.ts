@@ -98,7 +98,7 @@ async function main() {
     const memData = await memRes.json();
     console.log(`Response HTTP ${memRes.status}:`, JSON.stringify(redact(memData), null, 2), '\n');
 
-    const orgId = memData.memberships[0].organisation_id;
+    const orgId = memData.memberships[0].organisationId || memData.memberships[0].organisation_id;
 
     // 4. Workspaces
     console.log(`>>> 4. GET /api/session/workspaces?organisationId=[REDACTED_ORG_ID]`);
@@ -109,7 +109,7 @@ async function main() {
     const wsData = await wsRes.json();
     console.log(`Response HTTP ${wsRes.status}:`, JSON.stringify(redact(wsData), null, 2), '\n');
 
-    const wsId = wsData.workspaces[0].workspace_id;
+    const wsId = wsData.workspaces[0].id || wsData.workspaces[0].workspace_id;
 
     // 5. Context
     console.log('>>> 5. POST /api/session/context');
