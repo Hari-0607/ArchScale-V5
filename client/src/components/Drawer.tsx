@@ -1,106 +1,99 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
+import { Button } from './Button';
 
 interface DrawerProps {
-  isOpen: boolean;
-  onClose: () => void;
+  open: boolean;
   title: string;
-  subtitle?: string;
+  onClose: () => void;
+  onSave?: () => void;
+  saveLabel?: string;
+  saving?: boolean;
+  dirty?: boolean;
   children: React.ReactNode;
-  footer?: React.ReactNode;
-  width?: string;
+  width?: number;
 }
 
+const FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
 export const Drawer: React.FC<DrawerProps> = ({
-  isOpen,
-  onClose,
-  title,
-  subtitle,
-  children,
-  footer,
-  width = '480px',
+  open, title, onClose, onSave, saveLabel = 'Save', saving, dirty, children, width = 480
 }) => {
-  if (!isOpen) return null;
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const handleClose = () => {
+    if (dirty && !confirm('You have unsaved changes. Discard them?')) return;
+    onClose();
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (dirty && !confirm('You have unsaved changes. Discard them?')) return;
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [open, dirty, onClose]);
+
+  useEffect(() => {
+    if (!open || !panelRef.current) return;
+    const panel = panelRef.current;
+    const getFocusable = () => Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+    getFocusable()[0]?.focus();
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      const els = getFocusable();
+      if (!els.length) return;
+      const idx = els.indexOf(document.activeElement as HTMLElement);
+      if (e.shiftKey) {
+        if (idx <= 0) { e.preventDefault(); els[els.length - 1].focus(); }
+      } else {
+        if (idx === els.length - 1) { e.preventDefault(); els[0].focus(); }
+      }
+    };
+    document.addEventListener('keydown', trap);
+    return () => document.removeEventListener('keydown', trap);
+  }, [open]);
+
+  useEffect(() => {
+    if (open) document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = ''; };
+  }, [open]);
+
+  if (!open) return null;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.65)',
-        backdropFilter: 'blur(2px)',
-        zIndex: 1000,
-        display: 'flex',
-        justifyContent: 'flex-end',
-      }}
-      onClick={onClose}
-    >
+    <div style={{ position: 'fixed', inset: 0, zIndex: 8000 }}>
+      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)' }} onClick={handleClose} />
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         style={{
-          width,
-          maxWidth: '100%',
-          height: '100%',
-          backgroundColor: '#111827',
-          borderLeft: '1px solid #2d3748',
-          display: 'flex',
-          flexDirection: 'column',
-          boxShadow: '-8px 0 24px rgba(0, 0, 0, 0.5)',
+          position: 'absolute', top: 0, right: 0, bottom: 0,
+          width, maxWidth: '92vw',
+          background: 'var(--color-surface)',
+          boxShadow: 'var(--shadow-drawer)',
+          display: 'flex', flexDirection: 'column',
+          animation: 'slideIn 0.2s ease',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div
-          style={{
-            padding: '18px 24px',
-            borderBottom: '1px solid #2d3748',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            backgroundColor: '#161f30',
-          }}
-        >
-          <div>
-            <h3 style={{ margin: 0, fontSize: '17px', color: '#f8fafc', fontWeight: 700 }}>{title}</h3>
-            {subtitle && <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#94a3b8' }}>{subtitle}</p>}
-          </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#94a3b8',
-              fontSize: '20px',
-              cursor: 'pointer',
-              padding: '4px 8px',
-              borderRadius: '4px',
-            }}
-          >
-            ✕
-          </button>
+        <div style={{ padding: 'var(--sp-4) var(--sp-6)', borderBottom: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <h2 style={{ fontSize: 'var(--font-size-h2)', fontWeight: 600 }}>{title}</h2>
+          <Button variant="ghost" size="sm" onClick={handleClose} aria-label="Close">✕</Button>
         </div>
-
-        {/* Content */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>{children}</div>
-
-        {/* Footer */}
-        {footer && (
-          <div
-            style={{
-              padding: '16px 24px',
-              borderTop: '1px solid #2d3748',
-              backgroundColor: '#161f30',
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: '12px',
-            }}
-          >
-            {footer}
+        <div style={{ flex: 1, overflow: 'auto', padding: 'var(--sp-6)' }}>{children}</div>
+        {onSave && (
+          <div style={{ padding: 'var(--sp-4) var(--sp-6)', borderTop: '1px solid var(--color-border)', display: 'flex', gap: 'var(--sp-2)', justifyContent: 'flex-end', flexShrink: 0 }}>
+            <Button variant="secondary" onClick={handleClose} disabled={saving}>Cancel</Button>
+            <Button variant="primary" onClick={onSave} loading={saving}>{saveLabel}</Button>
           </div>
         )}
       </div>
     </div>
   );
 };
-
