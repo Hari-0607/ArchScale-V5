@@ -287,13 +287,15 @@ In Phase 3, build a lightweight React + Vite + TypeScript frontend inside `packa
      - `xauth-tasks-test`: Independent Tasks app repository (created in Phase 5).
      - `xauth-attendance-test`: Independent Attendance app repository (created in Phase 5).
    - **SDK Isolation**: The Foundation SDK will live in a dedicated folder (`packages/sdk` or `src/sdk`) with **strictly zero imports from server internals**, allowing clean standalone publishing/extraction.
-2. **MFA Enforcement**:
+2. **MFA Enforcement & Fixture Decision**:
    - **Per-organisation setting with a platform floor**:
-     - Platform roles (`founder`, `developer`, `client_servicing`, `accounts`) are permanently locked to `aal2`.
-     - Tenant organisations get a configurable setting (`organisations.mfa_requirement`).
-     - A Tenant Admin can raise the requirement (e.g. require MFA for all managers or members), but can **never** lower it below the platform floor.
-     - Changing tenant MFA settings requires step-up authentication.
-     - Default setting: Required for `business_owner`.
+     - Platform roles (`founder`, `developer`, `client_servicing`, `accounts`) and `business_owner` are permanently locked to `aal2` (roles.min_aal).
+     - Tenant organisations get a configurable setting (`organisations.member_min_aal`, default `'aal2'`).
+     - A Tenant Admin (`business_owner` at `aal2`) can lower the tenant setting to `'aal1'` or raise to `'aal2'`, but setting `'aal1'` can **never** lower a role whose `roles.min_aal` is `'aal2'`.
+     - Changing tenant MFA settings requires step-up authentication (`business_owner` at `aal2` via `fn_set_organisation_mfa_requirement`).
+   - **Fixture Decision for Test Tenants**:
+     - **Scenario test tenants set `member_min_aal = 'aal1'` explicitly**: In initial seed data and staging fixtures, only platform roles and `business_owner` are enrolled with TOTP MFA factors (`aal2`). Sub-owner tenant roles (`leader`, `manager_coordinator`, `executive`, `intern`, `collaborator`, `guest`) authenticate at `aal1`. If scenario test tenants were not set to `'aal1'`, baseline operational tests for these members would be blocked by Gate 8 `AUTH_AAL` before evaluating permission and hierarchy rules.
+     - **ONE test tenant retains the `'aal2'` default**: To prove and continuously verify that tenant-wide MFA enforcement works as designed, at least one test tenant retains the `'aal2'` default (verified in `tests/authz/02_allowed.test.ts` test 2b and `tests/migrations/10_organisational_hierarchy.test.ts` test 6), proving that a `leader` at `aal1` is strictly denied with `AUTH_AAL`, and when elevated to `aal2` is allowed.
 3. **Email Delivery**:
    - Custom SMTP configured in Supabase Auth (not Supabase's default rate-limited sender).
 
