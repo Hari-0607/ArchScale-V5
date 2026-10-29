@@ -65,3 +65,4 @@ export function getSentMails(): readonly SentMail[] {
 export function clearSentMails(): void {
     sentMails.length = 0;
 }
+

@@ -109,3 +109,4 @@ describe('A4 Account Flows & Password Recovery', () => {
         expect(rateLimited).toBe(true);
     });
 });
+
