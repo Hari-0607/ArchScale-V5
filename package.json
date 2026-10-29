@@ -24,7 +24,6 @@
   "author": "ArchScale Platform Team",
   "license": "UNLICENSED",
   "devDependencies": {
-    "@electric-sql/pglite": "^0.2.14",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "pg": "^8.13.1",

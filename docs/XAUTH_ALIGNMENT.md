@@ -22,34 +22,34 @@ However, XAuth v4.0 introduces distinct business-layer concepts to be integrated
 
 ---
 
-## 2. Gap Analysis Table (Sections 01–18)
+## 2. Gap Analysis Table (Sections 01–18) — Revised after Part 0 Verification
 
-> **Rule for Status:**  
-> - **DONE**: Requires pointing to an existing implementation file AND a passing test in the test suite.  
-> - **PARTIAL**: Capability exists in code or database, but lacks full test coverage, complete endpoints, or UI.  
-> - **MISSING**: Not present in the codebase.  
-> - **Staging Status**: Indicated as `[VERIFIED]` via direct read-only SQL queries against staging.
+> **Rules for Status:**  
+> - **DONE**: Points to an existing implementation file AND a passing test in the test suite.  
+> - **PARTIAL**: Capability exists in code or database but lacks full test coverage, complete endpoints, or UI.  
+> - **MISSING**: Not present in the codebase at all.  
+> - Staging claims marked **[VERIFIED]** show the exact read-only query and its result.
 
-| Section | Assignment Title | Status | Supporting File(s) | Passing Test(s) | Staging Verification |
-| :--- | :--- | :---: | :--- | :--- | :---: |
-| **01** | Foundation Setup | **PARTIAL** | `src/server/index.ts`, `src/authz/decide.ts`, `migrations/013_context_rls_and_authz_functions.sql` | `tests/server/http_server.test.ts`, `tests/authz/01_denials.test.ts` | **[VERIFIED]** `fn_create_access_context` & `013` RLS active on staging |
-| **02** | Basic Lightweight UI | **PARTIAL** | `src/server/public/index.html` (vanilla HTML/JS harness) | *None (manual test UI)* | N/A (Client UI) |
-| **03** | Development Environment & GitHub | **PARTIAL** | `vitest.config.ts`, `tests/setup/db_connection.ts`, `src/identity/providers/local.ts` | `tests/setup/test_db_guard.test.ts`, `tests/identity/local_identity.test.ts` | **[VERIFIED]** Staging DB connected & isolated from local tests |
-| **04** | Authentication & Invitations | **PARTIAL** | `src/identity/providers/supabase.ts`, `src/utils/totp.ts`, `migrations/004_workspaces_memberships_and_contexts.sql` | `tests/identity/local_identity.test.ts`, `tests/server/http_server.test.ts` | **[VERIFIED]** GoTrue auth & `invitations` table exist on staging |
-| **05** | Super Admin — Backstage | **PARTIAL** | `src/authz/decide.ts`, `migrations/005_approvals_and_support_access.sql`, `migrations/013_...` | `tests/authz/01_denials.test.ts`, `tests/migrations/09_context_rls_and_functions.test.ts` | **[VERIFIED]** Support grants & platform roles active |
-| **06** | Tenant Admin — Frontstage | **PARTIAL** | `src/context/access_context.ts`, `src/context/memberships.ts`, `src/server/index.ts` | `tests/server/http_server.test.ts`, `tests/migrations/09_context_rls_and_functions.test.ts` | **[VERIFIED]** Tenant context creation & RLS active |
-| **07** | Test Tenant & Team Structure | **PARTIAL** | `migrations/001_core_types_and_identities.sql`, `scripts/seed_staging_users.ts` | `tests/migrations/01_schema_and_types.test.ts` | **[VERIFIED]** 11 agreed roles exist; test fixture users exist in staging |
+| Sec | Assignment Title | Status | Implementation File(s) | Passing Test(s) | Staging Evidence |
+| :--- | :--- | :---: | :--- | :--- | :--- |
+| **01** | Foundation Setup | **PARTIAL** | `src/server/index.ts`, `src/authz/decide.ts`, `migrations/013_context_rls_and_authz_functions.sql` | `tests/server/http_server.test.ts` (10/10), `tests/authz/01_denials.test.ts` (11/11) | **[VERIFIED]** `SELECT proname FROM pg_proc WHERE proname = 'fn_create_access_context'` → 1 row |
+| **02** | Basic Lightweight UI | **PARTIAL** | `src/server/public/index.html` (vanilla HTML/JS test harness) | *None — manual UI only* | N/A |
+| **03** | Development Environment & GitHub | **PARTIAL** | `tests/setup/db_connection.ts`, `src/identity/providers/local.ts` | `tests/setup/test_db_guard.test.ts` (7/7), `tests/identity/local_identity.test.ts` (9/9 — test 9 proves guard) | **[VERIFIED]** Guard confirmed: `LocalProvider` throws `SECURITY VIOLATION` when `SUPABASE_URL` contains `supabase.co` |
+| **04** | Authentication & Invitations | **PARTIAL** | `src/identity/providers/supabase.ts`, `src/utils/totp.ts`, `migrations/004_...` | `tests/server/http_server.test.ts` test 10 (MFA aal1→aal2), `tests/staging/staging_authz.test.ts` (5/5) | **[VERIFIED]** `SELECT column_name FROM information_schema.columns WHERE table_name='invitations'` — table exists with `token_hash`, `status`; missing `'Sent'` status value |
+| **05** | Super Admin — Backstage | **PARTIAL** | `src/authz/decide.ts` (Gate 5 support check), `migrations/005_approvals_and_support_access.sql`, `migrations/013_...` | `tests/authz/01_denials.test.ts` (Gate 5 tests), `tests/staging/staging_authz.test.ts` test 2 (founder aal2 → 200) | **[VERIFIED]** `SELECT permission_key FROM role_permissions WHERE role_key='founder'` → includes `platform.organisations.read`, `platform.support.grant` |
+| **06** | Tenant Admin — Frontstage | **PARTIAL** | `src/context/access_context.ts`, `src/context/memberships.ts` | `tests/migrations/09_context_rls_and_functions.test.ts` (13/13), staging test 1 (business_owner aal2 → invite 200) | **[VERIFIED]** `SELECT column_name FROM information_schema.columns WHERE table_name='access_contexts' AND column_name='support_grant_id'` → 1 row |
+| **07** | Test Tenant & Team Structure | **PARTIAL** | `migrations/001_core_types_and_identities.sql`, `scripts/seed_staging_users.ts` | `tests/migrations/01_schema_and_types.test.ts` (7/7) | **[VERIFIED]** `SELECT key, portal FROM roles ORDER BY portal, level` → 11 rows (4 platform + 7 subscriber); 7 fixture users kept (newest set from delete script) |
 | **08** | Test Application A — Tasks | **MISSING** | *None* | *None* | N/A |
 | **09** | Tasks — Design Manager Visibility Exception | **MISSING** | *None* | *None* | N/A |
 | **10** | Test Application B — Attendance | **MISSING** | *None* | *None* | N/A |
-| **11** | Attendance — Restricted Access | **PARTIAL** | `src/authz/decide.ts` (deny-by-default on missing permission) | `tests/authz/01_denials.test.ts` | **[VERIFIED]** `business_owner` has zero `attendance.*` grants |
-| **12** | Reusable RBAC Controller | **PARTIAL** | `src/authz/decide.ts`, `src/config/route_permissions.ts` | `tests/authz/01_denials.test.ts`, `tests/authz/02_allowed.test.ts` | **[VERIFIED]** Permissions checked against context & active DB rows |
+| **11** | Attendance — Restricted Access | **MISSING** | No `attendance.*` permission keys registered in `permissions` table; no schema for attendance records | *None* | **[VERIFIED]** `SELECT permission_key FROM role_permissions WHERE permission_key LIKE 'attendance.%'` → 0 rows |
+| **12** | Reusable RBAC Controller | **PARTIAL** | `src/authz/decide.ts` (9 gates), `src/config/route_permissions.ts` | `tests/authz/01_denials.test.ts` (11/11), `tests/authz/02_allowed.test.ts` (8/8) | **[VERIFIED]** `SELECT role_key, permission_key FROM role_permissions WHERE role_key='business_owner' AND permission_key='org.members.invite'` → 1 row |
 | **13** | RBAC Management UI | **MISSING** | *None* | *None* | N/A |
-| **14** | User ID, Work ID & Ownership Testing | **PARTIAL** | `public.users` (`user_code`, `id`), `migrations/012_secure_user_mirror_access.sql` | `tests/migrations/08_user_mirror_secure_access.test.ts`, `tests/identity/local_identity.test.ts` | **[VERIFIED]** `fn_resolve_user_code` & mirror sync verified on staging |
-| **15** | Multi-Tenant & Modular Testing | **PARTIAL** | `migrations/013_context_rls_and_authz_functions.sql` | `tests/migrations/09_context_rls_and_functions.test.ts` | **[VERIFIED]** Multi-tenant RLS enforced on staging |
-| **16** | Key Testing Checklist | **PARTIAL** | `tests/server/http_server.test.ts` | `tests/server/http_server.test.ts` (10 passed) | **[VERIFIED]** Login, token upgrade to aal2, context isolation verified |
-| **17** | Developer Handover | **PARTIAL** | `docs/PHASE2_RUNBOOK.md`, `postman/archscale_phase2.http` | *Harness passing* | **[VERIFIED]** Staging runbook and fixtures documented |
-| **18** | Testing, Supabase Setup & Future Integration | **PARTIAL** | `migrations/001-013`, `seeds/001-002`, `scripts/apply_one_migration.ts` | Full local suite (99 passed across 14 test files) | **[VERIFIED]** 013 & seeds applied cleanly to staging in single transaction |
+| **14** | User ID, Work ID & Ownership Testing | **PARTIAL** | `migrations/012_secure_user_mirror_access.sql`, `public.users.user_code` | `tests/migrations/08_user_mirror_secure_access.test.ts` (12/12) | **[VERIFIED]** `SELECT proname FROM pg_proc WHERE proname='fn_resolve_user_code'` → 1 row |
+| **15** | Multi-Tenant & Modular Testing | **PARTIAL** | `migrations/013_context_rls_and_authz_functions.sql` | `tests/migrations/09_context_rls_and_functions.test.ts` (13/13) | **[VERIFIED]** staging_authz test 4: no-membership user → 0 memberships, context creation returns 400 |
+| **16** | Key Testing Checklist | **PARTIAL** | `tests/server/http_server.test.ts` | `tests/server/http_server.test.ts` (10/10) | **[VERIFIED]** staging tests: intern denied (403 `AUTH_PERMISSION`), business_owner aal1 denied (403 `AUTH_AAL`), aal2 allowed (200), founder aal2 allowed, logout kills both token and context |
+| **17** | Developer Handover | **PARTIAL** | `docs/PHASE2_RUNBOOK.md`, `postman/archscale_phase2.http` | *Local suite 99/99 passing* | **[VERIFIED]** Staging fixture users active (7 users, see 0.5 output) |
+| **18** | Testing, Supabase Setup & Future Integration | **PARTIAL** | `migrations/001-013`, `seeds/001-002`, `scripts/apply_one_migration.ts` | Local full suite: 14 files, 99 tests | **[VERIFIED]** `SELECT count(*) FROM pg_proc WHERE proname IN ('fn_create_access_context','fn_set_app_context','is_context_valid','fn_revoke_access_context')` → 4 rows |
 
 ---
 
