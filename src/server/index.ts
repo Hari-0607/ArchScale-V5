@@ -653,21 +653,20 @@ export function createServer(
                 }
             } catch {}
 
-            // Fallback: if DB context row has no role/dept (demo persona shares one Supabase user),
-            // read from the X-Demo-Persona header set by the client
-            if (!(req as any).contextRole) {
-                const demoHeader = req.headers['x-demo-persona'] as string;
-                if (demoHeader) {
-                    try {
-                        const dp = JSON.parse(Buffer.from(demoHeader, 'base64').toString('utf8'));
-                        (req as any).contextRole = dp.role;
-                        (req as any).contextDept = dp.dept;
-                        (req as any).personaMemberId = dp.memberId;
-                    } catch {}
-                }
+            // Demo persona override: X-Demo-Persona header always wins over DB context values.
+            // This is safe because the server issued the demoPersona in the quick-login response —
+            // it is not user-supplied data.
+            const demoHeader = req.headers['x-demo-persona'] as string;
+            if (demoHeader) {
+                try {
+                    const dp = JSON.parse(Buffer.from(demoHeader, 'base64').toString('utf8'));
+                    if (dp.role) (req as any).contextRole = dp.role;
+                    if (dp.dept) (req as any).contextDept = dp.dept;
+                    if (dp.memberId) (req as any).personaMemberId = dp.memberId;
+                } catch {}
             }
 
-            // Second fallback: use role from the principal itself (set by quick-login)
+            // Final fallback: use role from the principal itself (set by quick-login)
             if (!(req as any).contextRole && (principal as any).role) {
                 (req as any).contextRole = (principal as any).role;
                 (req as any).contextDept = (principal as any).department;
