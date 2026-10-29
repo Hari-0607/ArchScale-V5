@@ -106,10 +106,91 @@ async function main() {
 
         console.log('[2/3] All SQL files executed. Running read-only post-checks...');
 
+        const anyHas014 = resolvedFilePaths.some(p => path.basename(p).includes('014'));
         const anyHas013 = resolvedFilePaths.some(p => path.basename(p).includes('013'));
         const anyHas012 = resolvedFilePaths.some(p => path.basename(p).includes('012'));
 
-        if (anyHas013) {
+        if (anyHas014) {
+            console.log('Running specialized post-checks for Migration 014:');
+
+            // Check 1: Schema columns
+            const colCheck = await client.query(`
+                SELECT
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'organisations' AND column_name = 'member_min_aal') AS has_member_min_aal,
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'memberships' AND column_name = 'department') AS has_mem_dept,
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'memberships' AND column_name = 'reporting_manager_membership_id') AS has_mem_reporting,
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invitations' AND column_name = 'invited_by_membership_id') AS has_inv_invited_by_mem,
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invitations' AND column_name = 'accepted_at') AS has_inv_accepted_at,
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invitations' AND column_name = 'invited_by') AS has_old_invited_by,
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'invitations' AND column_name = 'used_at') AS has_old_used_at;
+            `);
+            const cr = colCheck.rows[0];
+            if (!cr.has_member_min_aal) throw new Error('Post-check 014 failed: organisations.member_min_aal missing');
+            if (!cr.has_mem_dept || !cr.has_mem_reporting) throw new Error('Post-check 014 failed: memberships hierarchy columns missing');
+            if (!cr.has_inv_invited_by_mem || !cr.has_inv_accepted_at) throw new Error('Post-check 014 failed: invitations upgraded columns missing');
+            if (cr.has_old_invited_by || cr.has_old_used_at) throw new Error('Post-check 014 failed: invitations old duplicate columns still exist');
+            console.log('  ✓ Schema columns and deduplication verified.');
+
+            // Check 2: Functions exist
+            const funcs014 = [
+                'fn_set_organisation_mfa_requirement',
+                'fn_get_effective_permissions',
+                'fn_list_org_members',
+                'fn_list_org_invitations',
+                'fn_rate_limit_hit',
+                'fn_create_invitation',
+                'fn_mark_invitation_sent',
+                'fn_revoke_invitation',
+                'fn_resend_invitation',
+                'fn_accept_invitation'
+            ];
+            const funcRes = await client.query(`
+                SELECT p.proname 
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public' AND p.proname = ANY($1::text[]);
+            `, [funcs014]);
+            const found014 = new Set(funcRes.rows.map(r => r.proname));
+            for (const f of funcs014) {
+                if (!found014.has(f)) throw new Error(`Post-check 014 failed: function ${f} missing from database!`);
+            }
+            console.log(`  ✓ All ${funcs014.length} Migration 014 functions exist.`);
+
+            // Check 3: Runtime cannot SELECT directly from invitations
+            const invPriv = await client.query(`
+                SELECT has_table_privilege('archscale_app_runtime', 'public.invitations', 'SELECT') AS can_select;
+            `);
+            if (invPriv.rows[0].can_select !== false) {
+                throw new Error('Post-check 014 failed: archscale_app_runtime has SELECT privilege on invitations!');
+            }
+            console.log('  ✓ Direct table SELECT on invitations is revoked from runtime role.');
+
+            // Check 4: Rate limit composite PK
+            const pkCheck = await client.query(`
+                SELECT COUNT(*) AS pk_cols
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                WHERE t.relname = 'auth_rate_limits' AND c.contype = 'p';
+            `);
+            if (parseInt(pkCheck.rows[0].pk_cols, 10) === 0) {
+                throw new Error('Post-check 014 failed: auth_rate_limits composite primary key missing!');
+            }
+            console.log('  ✓ auth_rate_limits composite primary key exists.');
+
+            // Check 5: Permissions
+            const permCheck = await client.query(`
+                SELECT role_key, permission_key
+                FROM public.role_permissions
+                WHERE (role_key = 'business_owner' AND permission_key = 'org.settings.manage')
+                   OR (role_key = 'founder' AND permission_key = 'platform.support.read');
+            `);
+            const boSettings = permCheck.rows.some(r => r.role_key === 'business_owner' && r.permission_key === 'org.settings.manage');
+            const founderSupport = permCheck.rows.some(r => r.role_key === 'founder' && r.permission_key === 'platform.support.read');
+            if (!boSettings) throw new Error('Post-check 014 failed: business_owner missing org.settings.manage');
+            if (!founderSupport) throw new Error('Post-check 014 failed: founder missing platform.support.read');
+            console.log('  ✓ New permissions org.settings.manage and platform.support.read granted.');
+
+        } else if (anyHas013) {
             console.log('Running specialized post-checks for Migration 013 + Seeds:');
             
             // Check 1: Required functions exist and are SECURITY DEFINER
