@@ -190,8 +190,11 @@ beforeAll(async () => {
     `, [staffMembershipId, ORG_A_ID]);
     supportGrantId = grantRes.rows[0].id;
 
-    // Runtime Client setup
-    runtimeClient = new pg.Client(RUNTIME_CONFIG);
+    // Runtime Client setup connected to the isolated test database
+    runtimeClient = new pg.Client({
+        ...RUNTIME_CONFIG,
+        database: 'archscale_test_014'
+    });
     await runtimeClient.connect();
 });
 
@@ -288,7 +291,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `, [ORG_A_ID, USER_OWNER_ID, ownerMembershipId])).rejects.toThrow(/invitations_status_check/i);
     });
 
-    it('6. organisations.member_min_aal: default aal2, effective minimum never lowers aal2 role, intern denied at aal1 in aal2 org', async () => {
+    it('6. organisations.member_min_aal: default aal2, effective minimum never lowers aal2 role, member denied at aal1 in aal2 org', async () => {
         // Confirm default is aal2
         const freshOrgRes = await adminPool.query(`
             INSERT INTO public.organisations (name, portal, tenant_type_key, status)
@@ -297,43 +300,42 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `);
         expect(freshOrgRes.rows[0].member_min_aal).toBe('aal2');
 
-        // Test intern in an org set to aal2:
-        // Create context for intern at aal1
-        const internAal1CtxRes = await adminPool.query(`
-            SELECT fn_create_access_context($1::uuid, 'sess_intern_aal1', $2::uuid, $3::uuid, 'aal1');
-        `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
-        const internAal1CtxId = internAal1CtxRes.rows[0].fn_create_access_context;
+        // Test leader (role.min_aal = 'aal1', has org.members.read) in an org set to aal2:
+        const leaderAal1CtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_leader_aal1', $2::uuid, $3::uuid, 'aal1');
+        `, [USER_LEADER_ID, ORG_A_ID, workspaceAId]);
+        const leaderAal1CtxId = leaderAal1CtxRes.rows[0].fn_create_access_context;
 
-        const internPrincipal: VerifiedPrincipal = {
-            id: USER_INTERN_ID,
-            email: 'intern@studio.test',
-            sessionId: 'sess_intern_aal1',
+        const leaderPrincipalAal1: VerifiedPrincipal = {
+            id: USER_LEADER_ID,
+            email: 'leader@studio.test',
+            sessionId: 'sess_leader_aal1',
             aal: 'aal1',
             issuer: 'test',
             audience: 'test',
             expiresAt: Math.floor(Date.now() / 1000) + 3600
         };
 
-        // Even though intern role.min_aal is aal1, org member_min_aal is aal2 -> decide() denies with AUTH_AAL
-        const internDecision = await decide(runtimeClient as any, internPrincipal, internAal1CtxId, 'project.records.read');
-        expect(internDecision.allow).toBe(false);
-        if (!internDecision.allow) {
-            expect(internDecision.gateFailed).toBe(8);
-            expect(internDecision.reasonCode).toBe('AUTH_AAL');
+        // Even though leader role.min_aal is aal1, org member_min_aal is aal2 -> decide() denies with AUTH_AAL
+        const leaderDecision = await decide(runtimeClient as any, leaderPrincipalAal1, leaderAal1CtxId, 'org.members.read');
+        expect(leaderDecision.allow).toBe(false);
+        if (!leaderDecision.allow) {
+            expect(leaderDecision.gateFailed).toBe(8);
+            expect(leaderDecision.reasonCode).toBe('AUTH_AAL');
         }
 
-        // Intern at aal2 in aal2 org is allowed
-        const internAal2CtxRes = await adminPool.query(`
-            SELECT fn_create_access_context($1::uuid, 'sess_intern_aal2', $2::uuid, $3::uuid, 'aal2');
-        `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
-        const internAal2CtxId = internAal2CtxRes.rows[0].fn_create_access_context;
-        const internPrincipalAal2: VerifiedPrincipal = {
-            ...internPrincipal,
-            sessionId: 'sess_intern_aal2',
+        // Leader at aal2 in aal2 org is allowed
+        const leaderAal2CtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_leader_aal2', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_LEADER_ID, ORG_A_ID, workspaceAId]);
+        const leaderAal2CtxId = leaderAal2CtxRes.rows[0].fn_create_access_context;
+        const leaderPrincipalAal2: VerifiedPrincipal = {
+            ...leaderPrincipalAal1,
+            sessionId: 'sess_leader_aal2',
             aal: 'aal2'
         };
-        const internDecisionAal2 = await decide(runtimeClient as any, internPrincipalAal2, internAal2CtxId, 'project.records.read');
-        expect(internDecisionAal2.allow).toBe(true);
+        const leaderDecisionAal2 = await decide(runtimeClient as any, leaderPrincipalAal2, leaderAal2CtxId, 'org.members.read');
+        expect(leaderDecisionAal2.allow).toBe(true);
 
         // Setting org to aal1 by business_owner at aal2:
         const ownerAal2CtxRes = await adminPool.query(`
@@ -341,9 +343,14 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
         const ownerAal2CtxId = ownerAal2CtxRes.rows[0].fn_create_access_context;
 
-        // Set context via fn_set_app_context
-        await adminPool.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_owner_mfa');`, [ownerAal2CtxId, USER_OWNER_ID]);
-        await adminPool.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`);
+        // Set context via fn_set_app_context on a dedicated client session
+        const client = await adminPool.connect();
+        try {
+            await client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerAal2CtxId, USER_OWNER_ID, 'sess_owner_mfa']);
+            await client.query(`SELECT fn_set_organisation_mfa_requirement('aal1');`);
+        } finally {
+            client.release();
+        }
 
         const orgCheck = await adminPool.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [ORG_A_ID]);
         expect(orgCheck.rows[0].member_min_aal).toBe('aal1');
@@ -372,8 +379,13 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         }
 
         // Restore org to aal2
-        await adminPool.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_owner_mfa');`, [ownerAal2CtxId, USER_OWNER_ID]);
-        await adminPool.query(`SELECT fn_set_organisation_mfa_requirement('aal2');`);
+        const restoreClient = await adminPool.connect();
+        try {
+            await restoreClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerAal2CtxId, USER_OWNER_ID, 'sess_owner_mfa']);
+            await restoreClient.query(`SELECT fn_set_organisation_mfa_requirement('aal2');`);
+        } finally {
+            restoreClient.release();
+        }
     });
 
     it('7. access_profiles: attaches to any subscriber role; rejected if role or org mismatch; permissions merge', async () => {
@@ -414,24 +426,29 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
             UPDATE public.memberships SET profile_id = $1 WHERE id = $2;
         `, [execProfileId, execMembershipId]);
 
-        // Set context for exec
+        // Set context for exec on dedicated client
         const execCtxRes = await adminPool.query(`
             SELECT fn_create_access_context($1::uuid, 'sess_exec_perms', $2::uuid, $3::uuid, 'aal2');
         `, [USER_EXEC_ID, ORG_A_ID, workspaceAId]);
         const execCtxId = execCtxRes.rows[0].fn_create_access_context;
 
-        await adminPool.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_exec_perms');`, [execCtxId, USER_EXEC_ID]);
+        const client = await adminPool.connect();
+        try {
+            await client.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [execCtxId, USER_EXEC_ID, 'sess_exec_perms']);
 
-        // Query effective permissions parameterless
-        const permsRes = await adminPool.query(`SELECT fn_get_effective_permissions() AS perms;`);
-        const perms: string[] = permsRes.rows[0].perms;
-        expect(perms).toContain('project.records.read');
-        expect(perms).toContain('org.members.approve');
+            // Query effective permissions parameterless
+            const permsRes = await client.query(`SELECT fn_get_effective_permissions() AS perms;`);
+            const perms: string[] = permsRes.rows[0].perms;
+            expect(perms).toContain('project.records.read');
+            expect(perms).toContain('org.members.approve');
 
-        // Querying membership belonging to Org B returns empty array
-        const otherOrgMem = await adminPool.query(`SELECT id FROM public.memberships WHERE organisation_id = $1 LIMIT 1;`, [ORG_B_ID]);
-        const crossOrgRes = await adminPool.query(`SELECT fn_get_effective_permissions($1::uuid) AS perms;`, [otherOrgMem.rows[0].id]);
-        expect(crossOrgRes.rows[0].perms).toEqual([]);
+            // Querying membership belonging to Org B returns empty array
+            const otherOrgMem = await client.query(`SELECT id FROM public.memberships WHERE organisation_id = $1 LIMIT 1;`, [ORG_B_ID]);
+            const crossOrgRes = await client.query(`SELECT fn_get_effective_permissions($1::uuid) AS perms;`, [otherOrgMem.rows[0].id]);
+            expect(crossOrgRes.rows[0].perms).toEqual([]);
+        } finally {
+            client.release();
+        }
     });
 
     it('8. RLS: member sees only their own membership row and only their own invitations', async () => {
@@ -441,7 +458,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
         const internCtxId = internCtxRes.rows[0].fn_create_access_context;
 
-        await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_intern_rls');`, [internCtxId, USER_INTERN_ID]);
+        await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [internCtxId, USER_INTERN_ID, 'sess_intern_rls']);
 
         // Direct SELECT on memberships returns ONLY intern's row
         const memRows = await runtimeClient.query(`SELECT id, user_id FROM public.memberships;`);
@@ -471,7 +488,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
                 SELECT fn_create_access_context($1::uuid, $2, $3::uuid, $4::uuid, 'aal2');
             `, [userId, sessionId, ORG_A_ID, workspaceAId]);
             const ctxId = ctxRes.rows[0].fn_create_access_context;
-            await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3);`, [ctxId, userId, sessionId]);
+            await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ctxId, userId, sessionId]);
         }
 
         // 1. Guest: denied for both listing functions
@@ -516,7 +533,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `, [USER_STAFF_ID, ORG_A_ID, workspaceAId, supportGrantId]);
         const supCtxId = supCtxRes.rows[0].fn_create_access_context;
 
-        await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, 'sess_staff_list');`, [supCtxId, USER_STAFF_ID]);
+        await runtimeClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [supCtxId, USER_STAFF_ID, 'sess_staff_list']);
         const staffMembers = await runtimeClient.query(`SELECT * FROM fn_list_org_members();`);
         expect(staffMembers.rowCount).toBeGreaterThanOrEqual(5);
         const staffInvs = await runtimeClient.query(`SELECT * FROM fn_list_org_invitations();`);
