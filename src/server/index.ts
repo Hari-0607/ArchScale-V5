@@ -97,19 +97,46 @@ export function createServer(
 
     app.post('/api/demo/quick-login', async (req: Request, res: Response) => {
         try {
-            const { key } = req.body || {};
+            const { key, autoElevate } = req.body || {};
             const testUsersPath = path.join(process.cwd(), '.local/test-users.json');
             if (fs.existsSync(testUsersPath)) {
                 const users = JSON.parse(fs.readFileSync(testUsersPath, 'utf-8'));
-                const user = users[key];
+                const personaMap: Record<string, { baseKey: string; role: string; dept: string; title: string }> = {
+                    'founder': { baseKey: 'founder', role: 'founder', dept: 'Platform', title: 'Platform Super Admin' },
+                    'tenant_admin': { baseKey: 'business_owner', role: 'business_owner', dept: 'Management', title: 'Tenant Admin' },
+                    'business_owner': { baseKey: 'business_owner', role: 'business_owner', dept: 'Management', title: 'Tenant Admin' },
+                    'design_manager_1': { baseKey: 'leader', role: 'leader', dept: 'Design', title: 'Design Manager 1' },
+                    'junior_designer_1': { baseKey: 'intern', role: 'intern', dept: 'Design', title: 'Junior Designer 1' },
+                    'design_manager_2': { baseKey: 'leader', role: 'leader', dept: 'Design', title: 'Design Manager 2' },
+                    'junior_designer_2': { baseKey: 'intern', role: 'intern', dept: 'Design', title: 'Junior Designer 2' },
+                    'design_manager_3': { baseKey: 'leader', role: 'leader', dept: 'Design', title: 'Design Manager 3' },
+                    'junior_designer_3': { baseKey: 'intern', role: 'intern', dept: 'Design', title: 'Junior Designer 3' },
+                    'accounts_manager': { baseKey: 'client_servicing', role: 'manager_coordinator', dept: 'Accounts', title: 'Accounts Manager' },
+                    'junior_accountant': { baseKey: 'intern', role: 'intern', dept: 'Accounts', title: 'Junior Accountant' },
+                    'hr_manager': { baseKey: 'leader', role: 'manager_coordinator', dept: 'HR', title: 'HR Manager' },
+                    'junior_hr': { baseKey: 'intern', role: 'intern', dept: 'HR', title: 'Junior HR' },
+                };
+
+                const persona = personaMap[key] || { baseKey: key, role: key, dept: 'General', title: key };
+                const user = users[persona.baseKey] || users[key];
                 if (user) {
                     const idp = identityProvider || getIdentityProvider();
                     const session = await idp.signIn({ email: user.email, password: user.password });
+                    if (autoElevate || !user.totpSecret) {
+                        elevatedPrincipals.add(session.principal.id);
+                        if (session.principal.sessionId) elevatedPrincipals.add(session.principal.sessionId);
+                        session.principal.aal = 'aal2';
+                    }
                     return res.status(200).json({
                         accessToken: session.accessToken,
                         refreshToken: session.refreshToken,
-                        principal: session.principal,
-                        mfaRequired: !!user.totpSecret
+                        principal: {
+                            ...session.principal,
+                            role: persona.role,
+                            department: persona.dept,
+                            jobRole: persona.title
+                        },
+                        mfaRequired: autoElevate ? false : !!user.totpSecret
                     });
                 }
             }
