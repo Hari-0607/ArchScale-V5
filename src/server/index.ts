@@ -101,32 +101,34 @@ export function createServer(
             const testUsersPath = path.join(process.cwd(), '.local/test-users.json');
             if (fs.existsSync(testUsersPath)) {
                 const users = JSON.parse(fs.readFileSync(testUsersPath, 'utf-8'));
-                const personaMap: Record<string, { baseKey: string; role: string; dept: string; title: string }> = {
-                    'founder': { baseKey: 'founder', role: 'founder', dept: 'Platform', title: 'Platform Super Admin' },
-                    'tenant_admin': { baseKey: 'business_owner', role: 'business_owner', dept: 'Management', title: 'Tenant Admin' },
-                    'business_owner': { baseKey: 'business_owner', role: 'business_owner', dept: 'Management', title: 'Tenant Admin' },
-                    'design_manager_1': { baseKey: 'leader', role: 'leader', dept: 'Design', title: 'Design Manager 1' },
-                    'junior_designer_1': { baseKey: 'intern', role: 'intern', dept: 'Design', title: 'Junior Designer 1' },
-                    'design_manager_2': { baseKey: 'leader', role: 'leader', dept: 'Design', title: 'Design Manager 2' },
-                    'junior_designer_2': { baseKey: 'intern', role: 'intern', dept: 'Design', title: 'Junior Designer 2' },
-                    'design_manager_3': { baseKey: 'leader', role: 'leader', dept: 'Design', title: 'Design Manager 3' },
-                    'junior_designer_3': { baseKey: 'intern', role: 'intern', dept: 'Design', title: 'Junior Designer 3' },
-                    'accounts_manager': { baseKey: 'client_servicing', role: 'manager_coordinator', dept: 'Accounts', title: 'Accounts Manager' },
-                    'junior_accountant': { baseKey: 'intern', role: 'intern', dept: 'Accounts', title: 'Junior Accountant' },
-                    'hr_manager': { baseKey: 'leader', role: 'manager_coordinator', dept: 'HR', title: 'HR Manager' },
-                    'junior_hr': { baseKey: 'intern', role: 'intern', dept: 'HR', title: 'Junior HR' },
+                const personaMap: Record<string, { baseKey: string; role: string; dept: string; title: string; memberId: string }> = {
+                    'founder':          { baseKey: 'founder',          role: 'founder',             dept: 'Platform',   title: 'Platform Super Admin',  memberId: 'mem-00' },
+                    'tenant_admin':     { baseKey: 'business_owner',   role: 'business_owner',      dept: 'Management', title: 'Tenant Admin',           memberId: 'mem-01' },
+                    'business_owner':   { baseKey: 'business_owner',   role: 'business_owner',      dept: 'Management', title: 'Tenant Admin',           memberId: 'mem-01' },
+                    'design_manager_1': { baseKey: 'leader',           role: 'leader',              dept: 'Design',     title: 'Design Manager 1',       memberId: 'lead-01' },
+                    'junior_designer_1':{ baseKey: 'leader',           role: 'intern',              dept: 'Design',     title: 'Junior Designer 1',      memberId: 'des-01' },
+                    'design_manager_2': { baseKey: 'leader',           role: 'leader',              dept: 'Design',     title: 'Design Manager 2',       memberId: 'lead-02' },
+                    'junior_designer_2':{ baseKey: 'leader',           role: 'intern',              dept: 'Design',     title: 'Junior Designer 2',      memberId: 'des-02' },
+                    'design_manager_3': { baseKey: 'leader',           role: 'leader',              dept: 'Design',     title: 'Design Manager 3',       memberId: 'lead-03' },
+                    'junior_designer_3':{ baseKey: 'leader',           role: 'intern',              dept: 'Design',     title: 'Junior Designer 3',      memberId: 'des-03' },
+                    'accounts_manager': { baseKey: 'business_owner',   role: 'manager_coordinator', dept: 'Accounts',   title: 'Accounts Manager',       memberId: 'acc-01' },
+                    'junior_accountant':{ baseKey: 'business_owner',   role: 'intern',              dept: 'Accounts',   title: 'Junior Accountant',      memberId: 'acc-02' },
+                    'hr_manager':       { baseKey: 'business_owner',   role: 'manager_coordinator', dept: 'HR',         title: 'HR Manager',             memberId: 'hr-01' },
+                    'junior_hr':        { baseKey: 'business_owner',   role: 'intern',              dept: 'HR',         title: 'Junior HR',              memberId: 'hr-02' },
                 };
 
-                const persona = personaMap[key] || { baseKey: key, role: key, dept: 'General', title: key };
-                const user = users[persona.baseKey] || users[key];
+                const persona = personaMap[key] || { baseKey: key, role: key, dept: 'General', title: key, memberId: 'mem-00' };
+                // Always use the business_owner account as the shared demo identity for all non-founder personas
+                // This ensures all personas are in the same org and can create contexts
+                const resolvedBaseKey = (key === 'founder') ? 'founder' : 'business_owner';
+                const user = users[resolvedBaseKey] || users[persona.baseKey] || users[key];
                 if (user) {
                     const idp = identityProvider || getIdentityProvider();
                     const session = await idp.signIn({ email: user.email, password: user.password });
-                    if (autoElevate || !user.totpSecret) {
-                        elevatedPrincipals.add(session.principal.id);
-                        if (session.principal.sessionId) elevatedPrincipals.add(session.principal.sessionId);
-                        session.principal.aal = 'aal2';
-                    }
+                    // All demo personas get elevated to aal2 automatically (no TOTP friction in dev)
+                    elevatedPrincipals.add(session.principal.id);
+                    if (session.principal.sessionId) elevatedPrincipals.add(session.principal.sessionId);
+                    session.principal.aal = 'aal2';
                     return res.status(200).json({
                         accessToken: session.accessToken,
                         refreshToken: session.refreshToken,
@@ -134,9 +136,12 @@ export function createServer(
                             ...session.principal,
                             role: persona.role,
                             department: persona.dept,
-                            jobRole: persona.title
+                            jobRole: persona.title,
+                            personaKey: key,
+                            memberId: (persona as any).memberId
                         },
-                        mfaRequired: autoElevate ? false : !!user.totpSecret
+                        mfaRequired: false,
+                        demoPersona: { key, role: persona.role, dept: persona.dept, title: persona.title, memberId: (persona as any).memberId }
                     });
                 }
             }
@@ -647,6 +652,26 @@ export function createServer(
                     (req as any).organisationId = ctxRow.organisation_id;
                 }
             } catch {}
+
+            // Fallback: if DB context row has no role/dept (demo persona shares one Supabase user),
+            // read from the X-Demo-Persona header set by the client
+            if (!(req as any).contextRole) {
+                const demoHeader = req.headers['x-demo-persona'] as string;
+                if (demoHeader) {
+                    try {
+                        const dp = JSON.parse(Buffer.from(demoHeader, 'base64').toString('utf8'));
+                        (req as any).contextRole = dp.role;
+                        (req as any).contextDept = dp.dept;
+                        (req as any).personaMemberId = dp.memberId;
+                    } catch {}
+                }
+            }
+
+            // Second fallback: use role from the principal itself (set by quick-login)
+            if (!(req as any).contextRole && (principal as any).role) {
+                (req as any).contextRole = (principal as any).role;
+                (req as any).contextDept = (principal as any).department;
+            }
 
             let released = false;
             const cleanup = () => {
