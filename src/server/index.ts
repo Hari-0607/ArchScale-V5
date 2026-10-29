@@ -1141,6 +1141,197 @@ export function createServer(
         }
     });
 
+    // --- TEST APPLICATION A: TASKS ---
+    const initialTasks: any[] = [
+        { id: 'tsk-001', workId: 'WRK-1001', title: 'Conceptual Structural Layout', description: 'Initial massing and structural grid design', assignedToId: 'lead-01', assignedToName: 'Design Manager 1', department: 'Design', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-20', dueDateTime: '2026-11-05T18:00:00Z', priority: 'High', status: 'In Progress', approvalStatus: 'Pending', createdById: 'owner-01' },
+        { id: 'tsk-002', workId: 'WRK-1002', title: '3D Facade Parametric Study', description: 'Curtain wall panel subdivision and solar analysis', assignedToId: 'des-01', assignedToName: 'Junior Designer 1', department: 'Design', reviewerId: 'lead-01', reviewerName: 'Design Manager 1', startDate: '2026-10-22', dueDateTime: '2026-11-01T18:00:00Z', priority: 'Normal', status: 'In Progress', approvalStatus: 'Not Required', createdById: 'lead-01' },
+        { id: 'tsk-003', workId: 'WRK-1003', title: 'HVAC Ducting & Riser Coordination', description: 'MEP clash detection with ceiling clearance', assignedToId: 'lead-02', assignedToName: 'Design Manager 2', department: 'Design', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-21', dueDateTime: '2026-11-06T18:00:00Z', priority: 'High', status: 'To Do', approvalStatus: 'Not Required', createdById: 'owner-01' },
+        { id: 'tsk-004', workId: 'WRK-1004', title: 'Floorplan Working Drawings (Levels 2-4)', description: 'CAD drafting and door schedule dimensions', assignedToId: 'des-02', assignedToName: 'Junior Designer 2', department: 'Design', reviewerId: 'lead-02', reviewerName: 'Design Manager 2', startDate: '2026-10-23', dueDateTime: '2026-11-03T18:00:00Z', priority: 'Normal', status: 'Completed', approvalStatus: 'Approved', createdById: 'lead-02' },
+        { id: 'tsk-005', workId: 'WRK-1005', title: 'Landscape Planting & Hardscape Layout', description: 'Pedestrian plaza paving patterns and irrigation', assignedToId: 'lead-03', assignedToName: 'Design Manager 3', department: 'Design', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-24', dueDateTime: '2026-11-10T18:00:00Z', priority: 'Normal', status: 'In Review', approvalStatus: 'Pending', createdById: 'owner-01' },
+        { id: 'tsk-006', workId: 'WRK-1006', title: 'Photorealistic Exterior CGI Renders', description: 'V-Ray lighting setups and materiality textures', assignedToId: 'des-03', assignedToName: 'Junior Designer 3', department: 'Design', reviewerId: 'lead-03', reviewerName: 'Design Manager 3', startDate: '2026-10-25', dueDateTime: '2026-11-04T18:00:00Z', priority: 'Low', status: 'In Progress', approvalStatus: 'Not Required', createdById: 'lead-03' },
+        { id: 'tsk-007', workId: 'WRK-1007', title: 'Q3 Tenant Architectural Billing Reconciliation', description: 'Milestone invoicing and contractor retainage audit', assignedToId: 'acc-01', assignedToName: 'Accounts Manager', department: 'Accounts', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-15', dueDateTime: '2026-10-31T18:00:00Z', priority: 'Urgent', status: 'In Progress', approvalStatus: 'Pending', createdById: 'owner-01' },
+        { id: 'tsk-008', workId: 'WRK-1008', title: 'Vendor Invoice Processing & GL Entry', description: 'Material delivery verification and payment voucher creation', assignedToId: 'acc-02', assignedToName: 'Junior Accountant', department: 'Accounts', reviewerId: 'acc-01', reviewerName: 'Accounts Manager', startDate: '2026-10-26', dueDateTime: '2026-11-02T18:00:00Z', priority: 'Normal', status: 'To Do', approvalStatus: 'Not Required', createdById: 'acc-01' },
+        { id: 'tsk-009', workId: 'WRK-1009', title: 'Annual Performance Appraisal Framework', description: 'Department KPIs and evaluation rubrics for design staff', assignedToId: 'hr-01', assignedToName: 'HR Manager', department: 'HR', reviewerId: 'owner-01', reviewerName: 'Tenant Admin', startDate: '2026-10-18', dueDateTime: '2026-11-15T18:00:00Z', priority: 'High', status: 'In Progress', approvalStatus: 'Not Required', createdById: 'owner-01' },
+        { id: 'tsk-010', workId: 'WRK-1010', title: 'New Intern Onboarding & Hardware Setup', description: 'Workstation provisioning and security policy signoff', assignedToId: 'hr-02', assignedToName: 'Junior HR', department: 'HR', reviewerId: 'hr-01', reviewerName: 'HR Manager', startDate: '2026-10-27', dueDateTime: '2026-11-05T18:00:00Z', priority: 'Normal', status: 'Completed', approvalStatus: 'Approved', createdById: 'hr-01' }
+    ];
+    let tasksList = [...initialTasks];
+
+    app.get('/api/tasks', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const role = (req as any).contextRole || (principal as any).role || 'intern';
+        const dept = (req as any).contextDept || 'Design';
+
+        if (role === 'business_owner' || role === 'founder') {
+            return res.status(200).json({ tasks: tasksList });
+        }
+
+        if (role === 'leader' && (dept === 'Design' || !dept)) {
+            const visibleTasks = tasksList.filter(t => t.department === 'Design');
+            return res.status(200).json({ tasks: visibleTasks });
+        }
+
+        if (role === 'intern' && (dept === 'Design' || !dept)) {
+            const visibleTasks = tasksList.filter(t => t.assignedToId === 'des-01' || t.assignedToId === principal.id);
+            return res.status(200).json({ tasks: visibleTasks });
+        }
+
+        if (dept === 'Accounts') {
+            const visibleTasks = role === 'manager_coordinator' || role === 'leader'
+                ? tasksList.filter(t => t.department === 'Accounts')
+                : tasksList.filter(t => t.assignedToId === 'acc-02' || t.assignedToId === principal.id);
+            return res.status(200).json({ tasks: visibleTasks });
+        }
+
+        if (dept === 'HR') {
+            const visibleTasks = role === 'manager_coordinator' || role === 'leader'
+                ? tasksList.filter(t => t.department === 'HR')
+                : tasksList.filter(t => t.assignedToId === 'hr-02' || t.assignedToId === principal.id);
+            return res.status(200).json({ tasks: visibleTasks });
+        }
+
+        return res.status(200).json({ tasks: tasksList.filter(t => t.assignedToId === principal.id) });
+    });
+
+    app.post('/api/tasks', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const body = req.body || {};
+        const newTask = {
+            id: `tsk-${Date.now()}`,
+            workId: `WRK-${Math.floor(1000 + Math.random() * 9000)}`,
+            title: body.title || 'Untitled Task',
+            description: body.description || '',
+            assignedToId: body.assignedToId || principal.id,
+            assignedToName: body.assignedToName || 'Assigned Member',
+            department: body.department || 'Design',
+            reviewerId: body.reviewerId || principal.id,
+            reviewerName: body.reviewerName || 'Manager',
+            startDate: new Date().toISOString().split('T')[0],
+            dueDateTime: body.dueDateTime || new Date(Date.now() + 7 * 86400000).toISOString(),
+            priority: body.priority || 'Normal',
+            status: body.status || 'To Do',
+            approvalStatus: body.approvalStatus || 'Not Required',
+            createdById: principal.id
+        };
+        tasksList.unshift(newTask);
+        return res.status(201).json({ success: true, task: newTask });
+    });
+
+    app.patch('/api/tasks/:id', authenticate, requireContext, async (req: Request, res: Response) => {
+        const task = tasksList.find(t => t.id === req.params.id);
+        if (!task) return res.status(404).json({ error: 'TASK_NOT_FOUND' });
+        const body = req.body || {};
+        if (body.status) task.status = body.status;
+        if (body.priority) task.priority = body.priority;
+        return res.status(200).json({ success: true, task });
+    });
+
+    app.post('/api/tasks/:id/approve', authenticate, requireContext, async (req: Request, res: Response) => {
+        const task = tasksList.find(t => t.id === req.params.id);
+        if (!task) return res.status(404).json({ error: 'TASK_NOT_FOUND' });
+        const body = req.body || {};
+        task.approvalStatus = body.approvalStatus || 'Approved';
+        return res.status(200).json({ success: true, task });
+    });
+
+    // --- TEST APPLICATION B: ATTENDANCE (RESTRICTED ACCESS) ---
+    const initialAttendance: any[] = [
+        { id: 'att-01', attendanceId: 'ATT-2026-001', memberId: 'mem-01', memberName: 'Tenant Admin (Business Owner)', department: 'Management', date: '2026-10-28', checkInTime: '08:55 AM', checkOutTime: '06:30 PM', status: 'Present', remarks: 'Executive review', hrComments: [{ id: 'c1', author: 'HR Manager', text: 'On-site all day', timestamp: '2026-10-28T10:00:00Z' }], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-02', attendanceId: 'ATT-2026-002', memberId: 'mem-02', memberName: 'Design Manager 1', department: 'Design', date: '2026-10-28', checkInTime: '09:05 AM', checkOutTime: '06:15 PM', status: 'Present', remarks: 'Client coordination', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-03', attendanceId: 'ATT-2026-003', memberId: 'mem-03', memberName: 'Junior Designer 1', department: 'Design', date: '2026-10-28', checkInTime: '09:12 AM', checkOutTime: '06:05 PM', status: 'Present', remarks: '', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-04', attendanceId: 'ATT-2026-004', memberId: 'mem-04', memberName: 'Design Manager 2', department: 'Design', date: '2026-10-28', checkInTime: '09:00 AM', checkOutTime: '05:45 PM', status: 'Present', remarks: '', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-05', attendanceId: 'ATT-2026-005', memberId: 'mem-05', memberName: 'Junior Designer 2', department: 'Design', date: '2026-10-28', checkInTime: '09:30 AM', checkOutTime: '06:30 PM', status: 'Half Day', remarks: 'Medical appointment morning', hrComments: [{ id: 'c2', author: 'Junior HR', text: 'Doctor note verified', timestamp: '2026-10-28T14:30:00Z' }], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-06', attendanceId: 'ATT-2026-006', memberId: 'mem-06', memberName: 'Design Manager 3', department: 'Design', date: '2026-10-28', checkInTime: '08:45 AM', checkOutTime: '06:00 PM', status: 'Present', remarks: 'Site visit in afternoon', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-07', attendanceId: 'ATT-2026-007', memberId: 'mem-07', memberName: 'Junior Designer 3', department: 'Design', date: '2026-10-28', checkInTime: '09:00 AM', checkOutTime: '06:00 PM', status: 'Work From Home', remarks: 'Remote CAD rendering run', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-08', attendanceId: 'ATT-2026-008', memberId: 'mem-08', memberName: 'Accounts Manager', department: 'Accounts', date: '2026-10-28', checkInTime: '08:50 AM', checkOutTime: '06:10 PM', status: 'Present', remarks: 'Audit preparation', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-09', attendanceId: 'ATT-2026-009', memberId: 'mem-09', memberName: 'Junior Accountant', department: 'Accounts', date: '2026-10-28', checkInTime: '09:15 AM', checkOutTime: '06:15 PM', status: 'Present', remarks: '', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-10', attendanceId: 'ATT-2026-010', memberId: 'mem-10', memberName: 'HR Manager', department: 'HR', date: '2026-10-28', checkInTime: '08:40 AM', checkOutTime: '06:20 PM', status: 'Present', remarks: 'HR team supervision', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' },
+        { id: 'att-11', attendanceId: 'ATT-2026-011', memberId: 'mem-11', memberName: 'Junior HR', department: 'HR', date: '2026-10-28', checkInTime: '09:00 AM', checkOutTime: '06:00 PM', status: 'Present', remarks: '', hrComments: [], createdBy: 'hr-01', lastUpdatedBy: 'hr-01' }
+    ];
+    let attendanceList = [...initialAttendance];
+
+    app.get('/api/attendance', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const role = (req as any).contextRole || (principal as any).role || '';
+        const dept = (req as any).contextDept || '';
+
+        if (role === 'founder' || principal.email?.includes('founder')) {
+            return res.status(200).json({ records: attendanceList, audited: true });
+        }
+
+        if (dept === 'HR' || principal.email?.includes('hr') || role === 'hr_manager' || role === 'junior_hr') {
+            return res.status(200).json({ records: attendanceList });
+        }
+
+        if (role === 'business_owner') {
+            return res.status(403).json({
+                error: 'AUTH_ATTENDANCE_RESTRICTED',
+                message: 'Section 11 Matrix: Tenant Admin cannot access Attendance by default.'
+            });
+        }
+
+        return res.status(403).json({
+            error: 'AUTH_ATTENDANCE_RESTRICTED',
+            message: 'Section 11 Matrix: All other members cannot view Attendance, including their own records.'
+        });
+    });
+
+    app.patch('/api/attendance/:id', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const role = (req as any).contextRole || (principal as any).role || '';
+        const dept = (req as any).contextDept || '';
+
+        const isHrManager = (dept === 'HR' && role !== 'intern') || principal.email?.includes('hr-manager') || role === 'hr_manager';
+        if (!isHrManager) {
+            return res.status(403).json({
+                error: 'AUTH_ATTENDANCE_EDIT_DENIED',
+                message: 'Section 11 Matrix: Only HR Manager may edit attendance values. Junior HR is restricted to commenting.'
+            });
+        }
+
+        const record = attendanceList.find(a => a.id === req.params.id);
+        if (!record) return res.status(404).json({ error: 'ATTENDANCE_RECORD_NOT_FOUND' });
+
+        const body = req.body || {};
+        if (body.status) record.status = body.status;
+        if (body.checkInTime) record.checkInTime = body.checkInTime;
+        if (body.checkOutTime) record.checkOutTime = body.checkOutTime;
+        record.lastUpdatedBy = principal.email || 'HR Manager';
+
+        return res.status(200).json({ success: true, record });
+    });
+
+    app.post('/api/attendance/:id/comment', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const dept = (req as any).contextDept || '';
+
+        const isHrTeam = dept === 'HR' || principal.email?.includes('hr');
+        if (!isHrTeam) {
+            return res.status(403).json({
+                error: 'AUTH_ATTENDANCE_COMMENT_DENIED',
+                message: 'Section 11 Matrix: Only HR staff may append attendance comments.'
+            });
+        }
+
+        const record = attendanceList.find(a => a.id === req.params.id);
+        if (!record) return res.status(404).json({ error: 'ATTENDANCE_RECORD_NOT_FOUND' });
+
+        const body = req.body || {};
+        if (!body.comment || !body.comment.trim()) {
+            return res.status(400).json({ error: 'COMMENT_REQUIRED' });
+        }
+
+        if (!record.hrComments) record.hrComments = [];
+        const newComment = {
+            id: `c-${Date.now()}`,
+            author: principal.email?.includes('junior') ? 'Junior HR' : 'HR Manager',
+            text: body.comment.trim(),
+            timestamp: new Date().toISOString()
+        };
+        record.hrComments.push(newComment);
+
+        return res.status(200).json({ success: true, comment: newComment });
+    });
+
     // 404 handler
     app.use((req: Request, res: Response) => {
         return res.status(404).json({ error: 'NOT_FOUND' });
