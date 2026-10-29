@@ -4,9 +4,12 @@
 // Access token lives only in module memory — never written to localStorage/sessionStorage
 let _token: string | null = null;
 let _contextId: string | null = null;
+let _demoPersona: { role: string; dept: string; memberId: string; title: string } | null = null;
 
 export function setToken(t: string | null): void { _token = t; }
 export function setContextId(c: string | null): void { _contextId = c; }
+export function setDemoPersona(p: typeof _demoPersona): void { _demoPersona = p; }
+export function getDemoPersona() { return _demoPersona; }
 export function getToken(): string | null { return _token; }
 export function getContextId(): string | null { return _contextId; }
 
@@ -19,6 +22,10 @@ function buildHeaders(overrideToken?: string): HeadersInit {
   const tok = overrideToken ?? _token;
   if (tok) h['Authorization'] = `Bearer ${tok}`;
   if (_contextId) h['X-ArchScale-Context'] = _contextId;
+  // Send demo persona so server can apply correct RBAC when DB context lacks role/dept
+  if (_demoPersona) {
+    h['X-Demo-Persona'] = btoa(JSON.stringify(_demoPersona));
+  }
   return h;
 }
 

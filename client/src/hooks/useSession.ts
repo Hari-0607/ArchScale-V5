@@ -6,12 +6,17 @@ export interface Principal {
   sessionId?: string;
   aal: 'aal1' | 'aal2';
   role?: string;
+  department?: string;
+  jobRole?: string;
+  personaKey?: string;
+  memberId?: string;
 }
 
 export interface SessionData {
   accessToken: string;
   principal: Principal;
   mfaRequired?: boolean;
+  demoPersona?: { key: string; role: string; dept: string; title: string; memberId: string };
 }
 
 export interface ContextData {

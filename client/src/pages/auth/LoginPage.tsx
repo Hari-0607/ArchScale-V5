@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   quickLogin, signIn, signInByCode, verifyMfa,
-  setToken, setContextId,
+  setToken, setContextId, setDemoPersona,
 } from '../../api/client';
 import type { SessionData } from '../../hooks/useSession';
 import { Button } from '../../components/Button';
@@ -64,15 +64,20 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
   const [password, setPassword] = useState('');
   const [activeTab, setActiveTab] = useState<'quick' | 'manual'>('quick');
 
-  const finaliseSession = (data: { accessToken: string; principal: { id: string; email: string; aal: 'aal1'|'aal2'; role?: string; sessionId?: string }; mfaRequired?: boolean }) => {
+  const finaliseSession = (data: { accessToken: string; principal: { id: string; email: string; aal: 'aal1'|'aal2'; role?: string; department?: string; jobRole?: string; personaKey?: string; memberId?: string; sessionId?: string }; mfaRequired?: boolean; demoPersona?: { key: string; role: string; dept: string; title: string; memberId: string } }) => {
     const session: SessionData = {
       accessToken: data.accessToken,
       principal: data.principal,
       mfaRequired: data.mfaRequired,
+      demoPersona: data.demoPersona,
     };
+    // Store demo persona for RBAC header forwarding
+    if (data.demoPersona) {
+      setDemoPersona({ role: data.demoPersona.role, dept: data.demoPersona.dept, memberId: data.demoPersona.memberId, title: data.demoPersona.title });
+    }
     // If MFA is required, hold the token and show MFA screen
     if (data.mfaRequired && data.principal.aal !== 'aal2') {
-      setToken(data.accessToken);   // needed so verifyMfa can use it
+      setToken(data.accessToken);
       setMfaSession({ token: data.accessToken, email: data.principal.email });
     } else {
       setToken(data.accessToken);
