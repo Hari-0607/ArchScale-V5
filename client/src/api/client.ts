@@ -173,3 +173,4 @@ export async function updateAttendanceApi(id: string, payload: { status: string;
 export async function addAttendanceCommentApi(id: string, comment: string) {
   return apiRequest(`/api/attendance/${id}/comment`, 'POST', { comment });
 }
+

@@ -698,3 +698,4 @@ export const FrontstageView: React.FC<FrontstageViewProps> = ({ context, onConte
     </div>
   );
 };
+

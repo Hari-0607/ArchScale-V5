@@ -154,3 +154,4 @@ export const TeamView: React.FC = () => {
     </div>
   );
 };
+

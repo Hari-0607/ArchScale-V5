@@ -281,3 +281,4 @@ export const AttendanceApp: React.FC = () => {
     </div>
   );
 };
+

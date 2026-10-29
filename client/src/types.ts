@@ -102,3 +102,4 @@ export interface TenantItem {
   createdAt: string;
   adminEmail: string;
 }
+
