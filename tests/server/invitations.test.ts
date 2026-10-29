@@ -237,8 +237,16 @@ describe('Invitations Engine API Integration Tests', () => {
     });
 
     it('5. POST /api/invitations/accept succeeds for matching user email and copies metadata', async () => {
-        // Create fresh invitation for target.invitee
-        await fetch(`${baseUrl}/api/org/invitations`, {
+        const INVITEE5_EMAIL = 'invitee.five@inv.local';
+        const INVITEE5_USER_ID = '60000000-0000-0000-0000-000000000055';
+        localIdp.registerTestUser({ id: INVITEE5_USER_ID, email: INVITEE5_EMAIL, userCode: 'AS-INV55', password: 'test-password', aal: 'aal1' });
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [INVITEE5_USER_ID, INVITEE5_EMAIL]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;`, [INVITEE5_USER_ID, 'AS-INV55', INVITEE5_EMAIL]);
+        const invitee5Login = await localIdp.signIn({ email: INVITEE5_EMAIL, password: 'test-password' });
+        const invitee5Token = invitee5Login.accessToken;
+
+        // Create fresh invitation for invitee.five
+        const createRes = await fetch(`${baseUrl}/api/org/invitations`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${ownerToken}`,
@@ -246,7 +254,7 @@ describe('Invitations Engine API Integration Tests', () => {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                email: 'target.invitee@inv.local',
+                email: INVITEE5_EMAIL,
                 roleKey: 'intern',
                 department: 'Architecture',
                 jobRole: 'Model Maker',
@@ -254,9 +262,11 @@ describe('Invitations Engine API Integration Tests', () => {
                 expiresAt: new Date(Date.now() + 30 * 86400000).toISOString()
             })
         });
+        expect(createRes.status).toBe(200);
 
         const sent = getSentMails();
         const latestMail = sent[sent.length - 1];
+        expect(latestMail).toBeDefined();
         const rawToken = latestMail.rawToken;
 
         // Accepting with wrong user (other@inv.local) fails with 403 / 400
@@ -274,7 +284,7 @@ describe('Invitations Engine API Integration Tests', () => {
         const acceptRes = await fetch(`${baseUrl}/api/invitations/accept`, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${inviteeToken}`,
+                'Authorization': `Bearer ${invitee5Token}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ token: rawToken })
