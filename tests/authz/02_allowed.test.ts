@@ -63,12 +63,14 @@ beforeAll(async () => {
         );
     }
 
-    // Seed Organisations (explicitly aal1 to test that leader at aal1 is allowed, while business_owner remains protected at aal2)
+    // Seed Organisations:
+    // Subscriber Org A: member_min_aal = 'aal1' (proves leader at aal1 allowed, while business_owner remains protected at aal2)
+    // Subscriber Org B: member_min_aal = 'aal2' (proves leader at aal1 denied with AUTH_AAL, and allowed at aal2)
     await adminPool.query(`
         INSERT INTO public.organisations (id, name, portal, tenant_type_key, status, member_min_aal)
         VALUES 
             ($1, 'Subscriber Org A', 'subscriber', 'studio_owner', 'ACTIVE', 'aal1'),
-            ($2, 'Subscriber Org B', 'subscriber', 'studio_owner', 'ACTIVE', 'aal1')
+            ($2, 'Subscriber Org B', 'subscriber', 'studio_owner', 'ACTIVE', 'aal2')
         ON CONFLICT (id) DO NOTHING;
     `, [SUBSCRIBER_ORG_A_ID, SUBSCRIBER_ORG_B_ID]);
 
@@ -214,6 +216,66 @@ describe('02_allowed: Verification of Allowed Authorization Paths and Scopes', (
             expect(decision.allow).toBe(true);
             if (decision.allow) {
                 expect(decision.roleKey).toBe('leader');
+            }
+        } finally {
+            client.release();
+        }
+    });
+
+    it('2b. leader at aal1 in organisation with member_min_aal = aal2 is DENIED (AUTH_AAL), and at aal2 is ALLOWED', async () => {
+        const client = await adminPool.connect();
+        try {
+            // Seed leader membership in Org B (which has member_min_aal = 'aal2')
+            await client.query(`
+                INSERT INTO public.memberships (organisation_id, user_id, role_key, status)
+                VALUES ($1, $2, 'leader', 'ACTIVE')
+                ON CONFLICT (user_id, organisation_id) DO UPDATE SET role_key = 'leader', status = 'ACTIVE';
+            `, [SUBSCRIBER_ORG_B_ID, USER_LEADER_ID]);
+
+            // Leader at aal1 context in Org B
+            const ctxAal1Res = await client.query<{ fn_create_access_context: string }>(
+                `SELECT fn_create_access_context($1::uuid, 'sess_leader_b_aal1', $2::uuid, $3::uuid, 'aal1');`,
+                [USER_LEADER_ID, SUBSCRIBER_ORG_B_ID, wsBId]
+            );
+            const contextAal1Id = ctxAal1Res.rows[0].fn_create_access_context;
+
+            const principalAal1: VerifiedPrincipal = {
+                id: USER_LEADER_ID,
+                email: 'leader@test.local',
+                sessionId: 'sess_leader_b_aal1',
+                aal: 'aal1',
+                issuer: 'test',
+                audience: 'test',
+                expiresAt: Math.floor(Date.now() / 1000) + 3600
+            };
+
+            // Denied at aal1 with AUTH_AAL because Org B requires aal2
+            const decisionAal1 = await decide(client, principalAal1, contextAal1Id, 'org.members.read');
+            expect(decisionAal1.allow).toBe(false);
+            if (!decisionAal1.allow) {
+                expect(decisionAal1.gateFailed).toBe(8);
+                expect(decisionAal1.reasonCode).toBe('AUTH_AAL');
+            }
+
+            // Leader at aal2 context in Org B
+            const ctxAal2Res = await client.query<{ fn_create_access_context: string }>(
+                `SELECT fn_create_access_context($1::uuid, 'sess_leader_b_aal2', $2::uuid, $3::uuid, 'aal2');`,
+                [USER_LEADER_ID, SUBSCRIBER_ORG_B_ID, wsBId]
+            );
+            const contextAal2Id = ctxAal2Res.rows[0].fn_create_access_context;
+
+            const principalAal2: VerifiedPrincipal = {
+                ...principalAal1,
+                sessionId: 'sess_leader_b_aal2',
+                aal: 'aal2'
+            };
+
+            // Allowed at aal2
+            const decisionAal2 = await decide(client, principalAal2, contextAal2Id, 'org.members.read');
+            expect(decisionAal2.allow).toBe(true);
+            if (decisionAal2.allow) {
+                expect(decisionAal2.roleKey).toBe('leader');
+                expect(decisionAal2.aal).toBe('aal2');
             }
         } finally {
             client.release();

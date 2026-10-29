@@ -249,17 +249,17 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
     });
 
     it('5. invitations: status enum, columns, and unique pending per (organisation, lower(email))', async () => {
-        // Insert a Pending invitation
+        // Insert a Pending invitation (using invited_by_membership_id, no duplicate invited_by)
         const tokenHash = 'abc001hash';
         const invRes = await adminPool.query(`
             INSERT INTO public.invitations (
                 organisation_id, email, token_hash, target_role_key, department, job_role,
-                reporting_manager_membership_id, invited_by, invited_by_membership_id, expires_at, status
+                reporting_manager_membership_id, invited_by_membership_id, expires_at, status
             ) VALUES (
                 $1, 'Invite.Test@Studio.test', $2, 'executive', 'Design', 'Junior Designer',
-                $3, $4, $5, now() + interval '7 days', 'Pending'
+                $3, $4, now() + interval '7 days', 'Pending'
             ) RETURNING *;
-        `, [ORG_A_ID, tokenHash, mgrMembershipId, USER_OWNER_ID, ownerMembershipId]);
+        `, [ORG_A_ID, tokenHash, mgrMembershipId, ownerMembershipId]);
 
         const inv = invRes.rows[0];
         expect(inv.token_hash).toBe(tokenHash);
@@ -271,23 +271,27 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         expect(inv.status).toBe('Pending');
         expect(inv.resend_count).toBe(0);
 
+        // Confirm duplicate columns invited_by and used_at are dropped
+        expect(inv).not.toHaveProperty('invited_by');
+        expect(inv).not.toHaveProperty('used_at');
+
         // Duplicate insert with different casing on email must fail unique constraint
         await expect(adminPool.query(`
             INSERT INTO public.invitations (
-                organisation_id, email, token_hash, target_role_key, invited_by, invited_by_membership_id, expires_at, status
+                organisation_id, email, token_hash, target_role_key, invited_by_membership_id, expires_at, status
             ) VALUES (
-                $1, 'invite.test@studio.test', 'abc002hash', 'executive', $2, $3, now() + interval '7 days', 'Pending'
+                $1, 'invite.test@studio.test', 'abc002hash', 'executive', $2, now() + interval '7 days', 'Pending'
             );
-        `, [ORG_A_ID, USER_OWNER_ID, ownerMembershipId])).rejects.toThrow(/unique|uq_invitations_pending/i);
+        `, [ORG_A_ID, ownerMembershipId])).rejects.toThrow(/unique|uq_invitations_pending/i);
 
         // Invalid status spelling is rejected
         await expect(adminPool.query(`
             INSERT INTO public.invitations (
-                organisation_id, email, token_hash, target_role_key, invited_by, invited_by_membership_id, expires_at, status
+                organisation_id, email, token_hash, target_role_key, invited_by_membership_id, expires_at, status
             ) VALUES (
-                $1, 'invalid.status@studio.test', 'abc003hash', 'executive', $2, $3, now() + interval '7 days', 'PENDING'
+                $1, 'invalid.status@studio.test', 'abc003hash', 'executive', $2, now() + interval '7 days', 'PENDING'
             );
-        `, [ORG_A_ID, USER_OWNER_ID, ownerMembershipId])).rejects.toThrow(/invitations_status_check/i);
+        `, [ORG_A_ID, ownerMembershipId])).rejects.toThrow(/invitations_status_check/i);
     });
 
     it('6. organisations.member_min_aal: default aal2, effective minimum never lowers aal2 role, member denied at aal1 in aal2 org', async () => {
