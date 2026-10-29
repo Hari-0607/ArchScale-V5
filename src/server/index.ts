@@ -1223,37 +1223,45 @@ export function createServer(
     app.get('/api/tasks', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const role = (req as any).contextRole || (principal as any).role || 'intern';
-        const dept = (req as any).contextDept || 'Design';
+        const dept = (req as any).contextDept || '';
+        // memberId from demo persona (e.g. 'des-01') used for own-task filtering
+        const memberId = (req as any).personaMemberId || principal.id;
 
+        // Tenant admin and platform super admin: full access
         if (role === 'business_owner' || role === 'founder') {
             return res.status(200).json({ tasks: tasksList });
         }
 
-        if (role === 'leader' && (dept === 'Design' || !dept)) {
+        // Design department — Design Managers get full Design visibility (cross-team exception per §09)
+        if (dept === 'Design' && (role === 'leader' || role === 'manager_coordinator')) {
             const visibleTasks = tasksList.filter(t => t.department === 'Design');
             return res.status(200).json({ tasks: visibleTasks });
         }
 
-        if (role === 'intern' && (dept === 'Design' || !dept)) {
-            const visibleTasks = tasksList.filter(t => t.assignedToId === 'des-01' || t.assignedToId === principal.id);
+        // Design juniors — own tasks only
+        if (dept === 'Design' && role === 'intern') {
+            const visibleTasks = tasksList.filter(t => t.assignedToId === memberId || t.assignedToId === principal.id);
             return res.status(200).json({ tasks: visibleTasks });
         }
 
+        // Accounts department — managers see Accounts tasks, juniors see own
         if (dept === 'Accounts') {
-            const visibleTasks = role === 'manager_coordinator' || role === 'leader'
+            const visibleTasks = (role === 'manager_coordinator' || role === 'leader')
                 ? tasksList.filter(t => t.department === 'Accounts')
-                : tasksList.filter(t => t.assignedToId === 'acc-02' || t.assignedToId === principal.id);
+                : tasksList.filter(t => t.assignedToId === memberId || t.assignedToId === principal.id);
             return res.status(200).json({ tasks: visibleTasks });
         }
 
+        // HR department — managers see HR tasks, juniors see own
         if (dept === 'HR') {
-            const visibleTasks = role === 'manager_coordinator' || role === 'leader'
+            const visibleTasks = (role === 'manager_coordinator' || role === 'leader')
                 ? tasksList.filter(t => t.department === 'HR')
-                : tasksList.filter(t => t.assignedToId === 'hr-02' || t.assignedToId === principal.id);
+                : tasksList.filter(t => t.assignedToId === memberId || t.assignedToId === principal.id);
             return res.status(200).json({ tasks: visibleTasks });
         }
 
-        return res.status(200).json({ tasks: tasksList.filter(t => t.assignedToId === principal.id) });
+        // Default: own tasks only
+        return res.status(200).json({ tasks: tasksList.filter(t => t.assignedToId === memberId || t.assignedToId === principal.id) });
     });
 
     app.post('/api/tasks', authenticate, requireContext, async (req: Request, res: Response) => {
