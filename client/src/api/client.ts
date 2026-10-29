@@ -1,178 +1,164 @@
-import { AccessContext, AttendanceItem, Membership, TaskItem, TeamMember, TenantItem, UserSession, Workspace } from '../types';
+// API boundary — server responses are untyped at the wire level
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-let currentSession: UserSession | null = null;
-let currentContext: AccessContext | null = null;
+// Access token lives only in module memory — never written to localStorage/sessionStorage
+let _token: string | null = null;
+let _contextId: string | null = null;
 
-export function setApiSession(session: UserSession | null) {
-  currentSession = session;
+export function setToken(t: string | null): void { _token = t; }
+export function setContextId(c: string | null): void { _contextId = c; }
+export function getToken(): string | null { return _token; }
+export function getContextId(): string | null { return _contextId; }
+
+export type ApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; status: number; code: string; message: string };
+
+function buildHeaders(overrideToken?: string): HeadersInit {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  const tok = overrideToken ?? _token;
+  if (tok) h['Authorization'] = `Bearer ${tok}`;
+  if (_contextId) h['X-ArchScale-Context'] = _contextId;
+  return h;
 }
 
-export function setApiContext(context: AccessContext | null) {
-  currentContext = context;
+function mapError(status: number, body: any): { code: string; message: string } {
+  if (status === 401) return { code: 'UNAUTHENTICATED', message: 'Your session has expired. Please sign in again.' };
+  if (status === 403) return { code: body?.code ?? 'FORBIDDEN', message: 'You do not have permission to do that.' };
+  if (status === 429) return { code: 'RATE_LIMITED', message: 'Too many attempts — please wait a moment and try again.' };
+  const code = body?.code ?? body?.error ?? String(status);
+  const message = body?.message ?? body?.error ?? `Request failed (${status})`;
+  return { code, message };
 }
 
-export function getApiSession() {
-  return currentSession;
-}
-
-export function getApiContext() {
-  return currentContext;
-}
-
-function getHeaders(isJson = true, overrideToken?: string): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (isJson) headers['Content-Type'] = 'application/json';
-  const token = overrideToken || currentSession?.accessToken;
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  if (currentContext?.contextId) {
-    headers['X-ArchScale-Context'] = currentContext.contextId;
-  }
-  return headers;
-}
-
-export async function apiRequest<T = any>(
+export async function api<T = any>(
   path: string,
   method = 'GET',
-  body?: any,
+  body?: unknown,
   overrideToken?: string
-): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
+): Promise<ApiResult<T>> {
   try {
     const res = await fetch(path, {
       method,
-      headers: getHeaders(body !== undefined, overrideToken),
+      headers: buildHeaders(overrideToken),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    const data = await res.json().catch(() => ({}));
+    let data: any = {};
+    try { data = await res.json(); } catch { /* empty body is fine */ }
     if (!res.ok) {
-      return { ok: false, status: res.status, error: data.error || data.message || `HTTP ${res.status}` };
+      const { code, message } = mapError(res.status, data);
+      return { ok: false, status: res.status, code, message };
     }
-    return { ok: true, status: res.status, data };
+    return { ok: true, data: data as T };
   } catch (err: any) {
-    return { ok: false, status: 0, error: err.message || 'Network error' };
+    return { ok: false, status: 0, code: 'NETWORK_ERROR', message: 'Network error — check your connection and try again.' };
   }
 }
 
-// Auth APIs
-export async function signInApi(identifier: string, password: string) {
-  const isUserCode = identifier.toUpperCase().startsWith('AS-');
-  return apiRequest('/api/session/sign-in', 'POST', {
-    password,
-    ...(isUserCode ? { userCode: identifier } : { email: identifier }),
-  });
-}
+// ── Auth ──────────────────────────────────────────────────────────────────────
+export const signIn = (email: string, password: string) =>
+  api('/api/session/sign-in', 'POST', { email, password });
 
-export async function quickLoginApi(roleKey: string) {
-  return apiRequest('/api/demo/quick-login', 'POST', { key: roleKey });
-}
+export const signInByCode = (userCode: string, password: string) =>
+  api('/api/session/sign-in', 'POST', { userCode, password });
 
-export async function verifyMfaApi(code: string, bypass = false, token?: string) {
-  return apiRequest('/api/session/mfa/verify', 'POST', { code, bypass }, token);
-}
+export const quickLogin = (key: string) =>
+  api('/api/demo/quick-login', 'POST', { key });
 
-export async function logoutApi() {
-  return apiRequest('/api/session/logout', 'POST', {
-    contextId: currentContext?.contextId,
-  });
-}
+export const verifyMfa = (code: string, overrideToken?: string) =>
+  api('/api/session/mfa/verify', 'POST', { code }, overrideToken);
 
-// Context & Hierarchy
-export async function getMembershipsApi(): Promise<{ ok: boolean; memberships?: Membership[]; error?: string }> {
-  const res = await apiRequest<{ memberships: Membership[] }>('/api/session/memberships', 'GET');
-  return { ok: res.ok, memberships: res.data?.memberships, error: res.error };
-}
+export const recovery = (email: string) =>
+  api('/api/session/recovery', 'POST', { email });
 
-export async function getWorkspacesApi(organisationId: string): Promise<{ ok: boolean; workspaces?: Workspace[]; error?: string }> {
-  const res = await apiRequest<{ workspaces: Workspace[] }>(`/api/session/workspaces?organisationId=${encodeURIComponent(organisationId)}`, 'GET');
-  return { ok: res.ok, workspaces: res.data?.workspaces, error: res.error };
-}
+export const resetPassword = (token: string, newPassword: string) =>
+  api('/api/session/reset-password', 'POST', { token, newPassword });
 
-export async function createContextApi(organisationId: string, workspaceId: string) {
-  return apiRequest('/api/session/context', 'POST', { organisationId, workspaceId });
-}
+export const acceptInvitation = (token: string, password?: string) =>
+  api('/api/invitations/accept', 'POST', { token, password });
 
-export async function renewContextApi(contextId: string) {
-  return apiRequest('/api/session/context/renew', 'POST', { contextId });
-}
+export const logout = (contextId?: string) =>
+  api('/api/session/logout', 'POST', { contextId });
 
-// Team Members
-export async function getMembersApi(): Promise<{ ok: boolean; members?: TeamMember[]; error?: string }> {
-  const res = await apiRequest<{ data: TeamMember[] }>('/api/org/members', 'GET');
-  return { ok: res.ok, members: res.data?.data, error: res.error };
-}
+// ── Session hierarchy ─────────────────────────────────────────────────────────
+export const getMemberships = () =>
+  api<{ memberships: any[] }>('/api/session/memberships');
 
-export async function updateMemberRoleApi(memberId: string, roleKey: string) {
-  return apiRequest(`/api/org/members/${memberId}/role`, 'PATCH', { roleKey });
-}
+export const getWorkspaces = (organisationId: string) =>
+  api<{ workspaces: any[] }>(`/api/session/workspaces?organisationId=${encodeURIComponent(organisationId)}`);
 
-// Invitations
-export async function getInvitationsApi() {
-  return apiRequest('/api/org/invitations', 'GET');
-}
+export const createContext = (organisationId: string, workspaceId: string) =>
+  api('/api/session/context', 'POST', { organisationId, workspaceId });
 
-export async function sendInvitationApi(payload: {
-  email: string;
-  roleKey: string;
-  department: string;
-  jobRole: string;
-  invitationExpiresAt?: string;
-  membershipExpiresAt?: string;
-}) {
-  return apiRequest('/api/org/invitations', 'POST', payload);
-}
+export const renewContext = (contextId: string) =>
+  api('/api/session/context/renew', 'POST', { contextId });
 
-export async function revokeInvitationApi(invitationId: string) {
-  return apiRequest(`/api/org/invitations/${invitationId}/revoke`, 'POST');
-}
+// ── Me ────────────────────────────────────────────────────────────────────────
+export const getMe = () => api('/api/me');
+export const getMeSessions = () => api('/api/me/sessions');
+export const deleteMeSession = (id: string) => api(`/api/me/sessions/${id}`, 'DELETE');
+export const deleteAllMeSessions = () => api('/api/me/sessions', 'DELETE');
 
-// Backstage Platform APIs
-export async function getPlatformTenantsApi(): Promise<{ ok: boolean; tenants?: TenantItem[]; error?: string }> {
-  const res = await apiRequest<{ organisations: TenantItem[] }>('/api/platform/organisations', 'GET');
-  return { ok: res.ok, tenants: res.data?.organisations, error: res.error };
-}
+// ── Org: Members ──────────────────────────────────────────────────────────────
+export const getMembers = () => api<{ data: any[] }>('/api/org/members');
+export const updateMemberRole = (id: string, roleKey: string) =>
+  api(`/api/org/members/${id}/role`, 'PATCH', { roleKey });
+export const updateMemberProfile = (id: string, payload: unknown) =>
+  api(`/api/org/members/${id}/profile`, 'PATCH', payload);
+export const suspendMember = (id: string) =>
+  api(`/api/org/members/${id}/suspend`, 'POST');
+export const reactivateMember = (id: string) =>
+  api(`/api/org/members/${id}/reactivate`, 'POST');
 
-export async function registerTenantApi(name: string, adminEmail: string) {
-  return apiRequest('/api/platform/organisations', 'POST', { name, adminEmail });
-}
+// ── Org: Invitations ─────────────────────────────────────────────────────────
+export const getInvitations = () => api('/api/org/invitations');
+export const sendInvitation = (payload: unknown) =>
+  api('/api/org/invitations', 'POST', payload);
+export const revokeInvitation = (id: string) =>
+  api(`/api/org/invitations/${id}/revoke`, 'POST');
+export const resendInvitation = (id: string) =>
+  api(`/api/org/invitations/${id}/resend`, 'POST');
 
-export async function suspendTenantApi(tenantId: string) {
-  return apiRequest(`/api/platform/organisations/${tenantId}/suspend`, 'POST');
-}
+// ── Org: Settings ────────────────────────────────────────────────────────────
+export const setOrgMfa = (required: boolean) =>
+  api('/api/org/settings/mfa', 'POST', { required });
+export const getSupportGrants = () => api('/api/org/support-grants');
 
-export async function approveTenantApi(tenantId: string) {
-  return apiRequest(`/api/platform/organisations/${tenantId}/approve`, 'POST');
-}
+// ── Platform (Backstage) ──────────────────────────────────────────────────────
+export const getPlatformOrgs = () =>
+  api<{ organisations: any[] }>('/api/platform/organisations');
+export const getPlatformOrg = (id: string) =>
+  api(`/api/platform/organisations/${id}`);
+export const registerOrg = (name: string, adminEmail: string) =>
+  api('/api/platform/organisations', 'POST', { name, adminEmail });
+export const suspendOrg = (id: string) =>
+  api(`/api/platform/organisations/${id}/suspend`, 'POST');
+export const approveOrg = (id: string) =>
+  api(`/api/platform/organisations/${id}/approve`, 'POST');
+export const inviteOrgAdmin = (id: string, email: string) =>
+  api(`/api/platform/organisations/${id}/invite-admin`, 'POST', { email });
 
-// Tasks Application APIs
-export async function getTasksApi(): Promise<{ ok: boolean; tasks?: TaskItem[]; error?: string }> {
-  const res = await apiRequest<{ tasks: TaskItem[] }>('/api/tasks', 'GET');
-  return { ok: res.ok, tasks: res.data?.tasks, error: res.error };
-}
+export const createSupportGrant = (payload: unknown) =>
+  api('/api/platform/support/grants', 'POST', payload);
+export const revokeSupportGrant = (id: string) =>
+  api(`/api/platform/support/grants/${id}/revoke`, 'POST');
 
-export async function createTaskApi(task: Partial<TaskItem>) {
-  return apiRequest('/api/tasks', 'POST', task);
-}
+export const getPlatformAudit = (params?: Record<string, string>) => {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return api(`/api/platform/audit${qs}`);
+};
 
-export async function updateTaskStatusApi(taskId: string, status: string) {
-  return apiRequest(`/api/tasks/${taskId}`, 'PATCH', { status });
-}
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+export const getTasks = () => api<{ tasks: any[] }>('/api/tasks');
+export const createTask = (payload: unknown) => api('/api/tasks', 'POST', payload);
+export const updateTask = (id: string, payload: unknown) =>
+  api(`/api/tasks/${id}`, 'PATCH', payload);
+export const approveTask = (id: string, approvalStatus: string) =>
+  api(`/api/tasks/${id}/approve`, 'POST', { approvalStatus });
 
-export async function reviewTaskApi(taskId: string, approvalStatus: 'Approved' | 'Rejected') {
-  return apiRequest(`/api/tasks/${taskId}/approve`, 'POST', { approvalStatus });
-}
-
-// Attendance Application APIs
-export async function getAttendanceApi(): Promise<{ ok: boolean; records?: AttendanceItem[]; error?: string }> {
-  const res = await apiRequest<{ records: AttendanceItem[] }>('/api/attendance', 'GET');
-  return { ok: res.ok, records: res.data?.records, error: res.error };
-}
-
-export async function updateAttendanceApi(id: string, payload: { status: string; checkInTime?: string; checkOutTime?: string }) {
-  return apiRequest(`/api/attendance/${id}`, 'PATCH', payload);
-}
-
-export async function addAttendanceCommentApi(id: string, comment: string) {
-  return apiRequest(`/api/attendance/${id}/comment`, 'POST', { comment });
-}
-
+// ── Attendance ────────────────────────────────────────────────────────────────
+export const getAttendance = () => api<{ records: any[] }>('/api/attendance');
+export const updateAttendance = (id: string, payload: unknown) =>
+  api(`/api/attendance/${id}`, 'PATCH', payload);
+export const commentAttendance = (id: string, comment: string) =>
+  api(`/api/attendance/${id}/comment`, 'POST', { comment });
