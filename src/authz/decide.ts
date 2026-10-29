@@ -224,34 +224,42 @@ export async function decide(
     }
 
     // Gate 8: Role has permission & AAL
-    // First, check role holds the required permission
+    // First, check role holds the required permission (either directly or via access_profile)
     const permCheck = await client.query(
-        `SELECT 1 FROM public.role_permissions WHERE role_key = $1 AND permission_key = $2;`,
-        [row.role_key, routeDef.permission]
+        `SELECT 1 FROM public.role_permissions WHERE role_key = $1 AND permission_key = $2
+         UNION
+         SELECT 1 FROM public.access_profile_permissions app
+         JOIN public.memberships m ON m.profile_id = app.profile_id
+         WHERE m.id = $3::uuid AND app.permission_key = $2;`,
+        [row.role_key, routeDef.permission, row.membership_id]
     );
     if (permCheck.rowCount === 0) {
-        return deny(8, 'AUTH_PERMISSION', `Role ${row.role_key} does not hold permission ${routeDef.permission}`);
+        return deny(8, 'AUTH_PERMISSION', `Role ${row.role_key} (and profile) does not hold permission ${routeDef.permission}`);
     }
 
-    // Second, verify context AAL meets both role's min_aal and permission's min_aal
+    // Second, verify context AAL meets role min_aal, permission min_aal, AND organisation.member_min_aal
     const aalQuery = `
         SELECT 
             r.min_aal AS role_min_aal,
-            p.min_aal AS perm_min_aal
+            p.min_aal AS perm_min_aal,
+            o.member_min_aal AS org_min_aal
         FROM public.roles r
         CROSS JOIN public.permissions p
+        JOIN public.organisations o ON o.id = $3::uuid
         WHERE r.key = $1 AND p.key = $2;
     `;
-    const aalRes = await client.query<{ role_min_aal: 'aal1' | 'aal2'; perm_min_aal: 'aal1' | 'aal2' }>(
+    const aalRes = await client.query<{ role_min_aal: 'aal1' | 'aal2'; perm_min_aal: 'aal1' | 'aal2'; org_min_aal: 'aal1' | 'aal2' }>(
         aalQuery,
-        [row.role_key, routeDef.permission]
+        [row.role_key, routeDef.permission, row.organisation_id]
     );
 
     if (aalRes.rowCount && aalRes.rowCount > 0) {
-        const { role_min_aal, perm_min_aal } = aalRes.rows[0];
-        const requiredAal = (role_min_aal === 'aal2' || perm_min_aal === 'aal2') ? 'aal2' : 'aal1';
+        const { role_min_aal, perm_min_aal, org_min_aal } = aalRes.rows[0];
+        // Effective minimum = higher of role, permission, and (for subscriber) org setting
+        // Role or permission at aal2 can NEVER be lowered by organisation setting
+        const requiredAal = (role_min_aal === 'aal2' || perm_min_aal === 'aal2' || (row.portal === 'subscriber' && org_min_aal === 'aal2')) ? 'aal2' : 'aal1';
         if (requiredAal === 'aal2' && row.aal !== 'aal2') {
-            return deny(8, 'AUTH_AAL', `Operation requires AAL2 (role requires ${role_min_aal}, permission requires ${perm_min_aal}, current is ${row.aal})`);
+            return deny(8, 'AUTH_AAL', `Operation requires AAL2 (role: ${role_min_aal}, perm: ${perm_min_aal}, org: ${org_min_aal}, current: ${row.aal})`);
         }
     }
 
