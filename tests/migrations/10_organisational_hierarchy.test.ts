@@ -82,7 +82,13 @@ beforeAll(async () => {
         ON CONFLICT (id) DO NOTHING;
     `, [ORG_A_ID, ORG_B_ID]);
 
-    // Entitlement for ORG_A
+    // App & Entitlement for ORG_A
+    await adminPool.query(`
+        INSERT INTO public.app_catalogue (app_key, name, description)
+        VALUES ('core_portal', 'Core Portal', 'Main portal')
+        ON CONFLICT (app_key) DO NOTHING;
+    `);
+
     await adminPool.query(`
         INSERT INTO public.organisation_entitlements (organisation_id, app_key, is_enabled)
         VALUES ($1, 'core_portal', true)
