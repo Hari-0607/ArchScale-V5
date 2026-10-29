@@ -9,26 +9,38 @@
 --      - TRIGGER: cycle detection prevents circular chains
 --      - CONSTRAINT / TRIGGER: manager must be ACTIVE
 --   2. invitations table upgraded:
---      - Status enum: 'Pending', 'Sent', 'Accepted', 'Expired', 'Revoked'
+--      - Status enum: 'Pending', 'Sent', 'Accepted', 'Expired', 'Revoked' (single spelling)
 --      - target role, department, job_role, reporting_manager, access_profile_id
 --      - invited_by_membership_id
---      - UNIQUE index on (organisation_id, lower(email)) WHERE status = 'Pending'
+--      - UNIQUE index on (organisation_id, lower(email)) WHERE status IN ('Pending', 'Sent')
 --      - sent_at, accepted_at, revoked_at, resend_count
 --   3. organisations:
 --      - member_min_aal ('aal1' | 'aal2', default 'aal2')
---      - fn_set_organisation_mfa_requirement() Security Definer function
+--      - fn_set_organisation_mfa_requirement(p_min_aal) Security Definer function
+--        (derives actor/role/org strictly from active context)
 --   4. access_profiles & effective permissions:
---      - fn_get_effective_permissions(membership_id UUID) merges role + profile permissions
---   5. Security Definer functions for invitations & member updates
---      - Enforces fn_assert_not_support_context()
+--      - role_key on access_profiles (subscriber roles)
+--      - memberships.profile_id validated against role_key and organisation_id
+--      - fn_get_effective_permissions() merges role + profile permissions
+--        (restricted to caller's active organisation)
+--   5. Security Definer functions for listing members and invitations:
+--      - fn_list_org_members() (requires org.members.read)
+--      - fn_list_org_invitations() (requires org.members.invite)
+--      - Support context permitted to read; write operations blocked
+--   6. auth_rate_limits:
+--      - Direct DML revoked from runtime
+--      - fn_rate_limit_hit(key, action, max_attempts, window_seconds) Security Definer
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
 -- 1. Organisation additions: member_min_aal
 -- -----------------------------------------------------------------------------
 ALTER TABLE public.organisations
-    ADD COLUMN IF NOT EXISTS member_min_aal TEXT NOT NULL DEFAULT 'aal1'
+    ADD COLUMN IF NOT EXISTS member_min_aal TEXT NOT NULL DEFAULT 'aal2'
     CHECK (member_min_aal IN ('aal1', 'aal2'));
+
+COMMENT ON COLUMN public.organisations.member_min_aal IS
+'Effective minimum AAL is the higher of roles.min_aal and organisations.member_min_aal. Setting member_min_aal = ''aal1'' never lowers a role whose roles.min_aal is aal2. Setting member_min_aal = ''aal2'' requires all tenant members (including intern) to authenticate at aal2.';
 
 -- -----------------------------------------------------------------------------
 -- 2. Memberships additions: department, job_role, reporting_manager_membership_id
@@ -41,7 +53,7 @@ ALTER TABLE public.memberships
 CREATE INDEX IF NOT EXISTS idx_memberships_department ON public.memberships(organisation_id, department);
 CREATE INDEX IF NOT EXISTS idx_memberships_reporting ON public.memberships(reporting_manager_membership_id);
 
-    -- Constraint: Manager cannot be self
+-- Constraint: Manager cannot be self
 ALTER TABLE public.memberships
     DROP CONSTRAINT IF EXISTS chk_membership_reporting_not_self;
 ALTER TABLE public.memberships
@@ -65,6 +77,7 @@ BEGIN
             RAISE EXCEPTION 'chk_membership_reporting_not_self: Reporting manager cannot be self'
                 USING ERRCODE = 'P0001';
         END IF;
+
         -- 1. Manager must belong to same organisation and be ACTIVE
         SELECT organisation_id, status
         INTO v_mgr_org_id, v_mgr_status
@@ -117,9 +130,82 @@ CREATE TRIGGER trg_memberships_reporting_manager
     EXECUTE FUNCTION trg_fn_validate_reporting_manager();
 
 -- -----------------------------------------------------------------------------
--- 3. Invitations Table Upgrades
+-- 3. Access Profiles Upgrades: subscriber role_key and membership validation
 -- -----------------------------------------------------------------------------
--- If table exists with old status constraint, drop and re-add columns
+ALTER TABLE public.access_profiles
+    ADD COLUMN IF NOT EXISTS role_key TEXT REFERENCES public.roles(key);
+
+UPDATE public.access_profiles
+SET role_key = parent_role_key
+WHERE role_key IS NULL;
+
+-- Trigger to validate access_profile role belongs to subscriber portal
+CREATE OR REPLACE FUNCTION trg_fn_validate_access_profile_role()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_portal public.portal_type;
+BEGIN
+    IF NEW.role_key IS NOT NULL THEN
+        SELECT portal INTO v_portal FROM public.roles WHERE key = NEW.role_key;
+        IF v_portal <> 'subscriber' THEN
+            RAISE EXCEPTION 'Access profiles can only attach to subscriber roles (got % for portal %)', NEW.role_key, v_portal
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_access_profiles_role ON public.access_profiles;
+CREATE TRIGGER trg_access_profiles_role
+    BEFORE INSERT OR UPDATE OF role_key ON public.access_profiles
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_fn_validate_access_profile_role();
+
+-- Trigger on memberships: memberships.profile_id must match membership.role_key AND membership.organisation_id
+CREATE OR REPLACE FUNCTION trg_fn_validate_membership_profile()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_profile_role_key TEXT;
+    v_profile_org_id UUID;
+BEGIN
+    IF NEW.profile_id IS NOT NULL THEN
+        SELECT role_key, organisation_id INTO v_profile_role_key, v_profile_org_id
+        FROM public.access_profiles
+        WHERE id = NEW.profile_id;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Access profile % does not exist', NEW.profile_id
+                USING ERRCODE = 'P0002';
+        END IF;
+
+        IF v_profile_org_id <> NEW.organisation_id THEN
+            RAISE EXCEPTION 'Access profile organisation (%) does not match membership organisation (%)', v_profile_org_id, NEW.organisation_id
+                USING ERRCODE = 'P0001';
+        END IF;
+
+        IF v_profile_role_key <> NEW.role_key THEN
+            RAISE EXCEPTION 'Access profile role (%) does not match membership role (%)', v_profile_role_key, NEW.role_key
+                USING ERRCODE = 'P0001';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_memberships_profile ON public.memberships;
+CREATE TRIGGER trg_memberships_profile
+    BEFORE INSERT OR UPDATE OF profile_id, role_key, organisation_id ON public.memberships
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_fn_validate_membership_profile();
+
+-- -----------------------------------------------------------------------------
+-- 4. Invitations Table Upgrades
+-- -----------------------------------------------------------------------------
 ALTER TABLE public.invitations
     ADD COLUMN IF NOT EXISTS invited_by_membership_id UUID REFERENCES public.memberships(id) ON DELETE SET NULL,
     ADD COLUMN IF NOT EXISTS department TEXT,
@@ -130,22 +216,36 @@ ALTER TABLE public.invitations
     ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS resend_count INT NOT NULL DEFAULT 0;
 
--- Update status check constraint to support Pending, Sent, Accepted, Expired, Revoked
+-- Migrate existing uppercase rows
+UPDATE public.invitations
+SET status = CASE status
+    WHEN 'PENDING' THEN 'Pending'
+    WHEN 'ACCEPTED' THEN 'Accepted'
+    WHEN 'EXPIRED' THEN 'Expired'
+    WHEN 'REVOKED' THEN 'Revoked'
+    ELSE status
+END;
+
+-- One status spelling only: Pending, Sent, Accepted, Expired, Revoked
 ALTER TABLE public.invitations
     DROP CONSTRAINT IF EXISTS invitations_status_check;
 ALTER TABLE public.invitations
     ADD CONSTRAINT invitations_status_check
-    CHECK (status IN ('Pending', 'Sent', 'Accepted', 'Expired', 'Revoked', 'PENDING', 'ACCEPTED', 'EXPIRED', 'REVOKED'));
+    CHECK (status IN ('Pending', 'Sent', 'Accepted', 'Expired', 'Revoked'));
 
--- Unique Pending invitation per organisation and lower(email)
-CREATE UNIQUE INDEX IF NOT EXISTS uq_invitations_pending_org_email
+ALTER TABLE public.invitations
+    ALTER COLUMN status SET DEFAULT 'Pending';
+
+-- Unique pending index covers exactly status IN ('Pending', 'Sent') per (organisation_id, lower(email))
+DROP INDEX IF EXISTS uq_invitations_pending_org_email;
+CREATE UNIQUE INDEX uq_invitations_pending_org_email
     ON public.invitations (organisation_id, lower(email))
-    WHERE status IN ('Pending', 'Sent', 'PENDING');
+    WHERE status IN ('Pending', 'Sent');
 
 -- -----------------------------------------------------------------------------
--- 4. Effective Permissions Calculation (Roles + Access Profiles)
+-- 5. Effective Permissions Calculation (Roles + Access Profiles)
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION fn_get_effective_permissions(p_membership_id UUID)
+CREATE OR REPLACE FUNCTION fn_get_effective_permissions(p_membership_id UUID DEFAULT NULL)
 RETURNS TEXT[]
 LANGUAGE plpgsql
 STABLE
@@ -153,16 +253,39 @@ SECURITY DEFINER
 SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
+    v_target_mem_id UUID;
+    v_ctx_id UUID;
+    v_caller_org_id UUID;
+    v_mem_org_id UUID;
     v_role_key TEXT;
     v_profile_id UUID;
     v_perms TEXT[];
 BEGIN
-    SELECT role_key, profile_id
-    INTO v_role_key, v_profile_id
-    FROM public.memberships
-    WHERE id = p_membership_id;
+    v_ctx_id := fn_current_context_id();
+    IF v_ctx_id IS NULL OR NOT is_context_valid(v_ctx_id) THEN
+        RETURN '{}'::TEXT[];
+    END IF;
 
-    IF v_role_key IS NULL THEN
+    v_caller_org_id := fn_current_context_org_id();
+
+    IF p_membership_id IS NULL THEN
+        v_target_mem_id := fn_current_context_membership_id();
+    ELSE
+        v_target_mem_id := p_membership_id;
+    END IF;
+
+    IF v_target_mem_id IS NULL THEN
+        RETURN '{}'::TEXT[];
+    END IF;
+
+    -- Fetch membership, ensuring it belongs to caller's active organisation
+    SELECT organisation_id, role_key, profile_id
+    INTO v_mem_org_id, v_role_key, v_profile_id
+    FROM public.memberships
+    WHERE id = v_target_mem_id;
+
+    -- If membership not found or belongs to another organisation, return empty
+    IF v_mem_org_id IS NULL OR v_mem_org_id <> v_caller_org_id THEN
         RETURN '{}'::TEXT[];
     END IF;
 
@@ -189,10 +312,9 @@ REVOKE EXECUTE ON FUNCTION fn_get_effective_permissions(UUID) FROM PUBLIC;
 GRANT  EXECUTE ON FUNCTION fn_get_effective_permissions(UUID) TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 5. Organization MFA Requirement Setting Function
+-- 6. Organization MFA Requirement Setting Function
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_set_organisation_mfa_requirement(
-    p_context_id UUID,
     p_min_aal TEXT
 )
 RETURNS JSONB
@@ -201,27 +323,27 @@ SECURITY DEFINER
 SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
+    v_context_id UUID;
     v_org_id UUID;
     v_user_id UUID;
     v_role_key TEXT;
     v_aal TEXT;
-    v_support_grant_id UUID;
     v_old_setting TEXT;
 BEGIN
-    -- 1. Assert context validity and extract caller attributes
-    IF NOT is_context_valid(p_context_id) THEN
-        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Invalid context' USING ERRCODE = 'P0001';
+    -- 1. Derive active validated context
+    v_context_id := fn_current_context_id();
+    IF v_context_id IS NULL OR NOT is_context_valid(v_context_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT ac.organisation_id, ac.user_id, m.role_key, ac.aal_level, ac.support_grant_id
-    INTO v_org_id, v_user_id, v_role_key, v_aal, v_support_grant_id
+    -- 2. Reject support contexts (read-only)
+    PERFORM fn_assert_not_support_context();
+
+    SELECT ac.organisation_id, ac.user_id, m.role_key, ac.aal_level
+    INTO v_org_id, v_user_id, v_role_key, v_aal
     FROM public.access_contexts ac
     JOIN public.memberships m ON m.id = ac.membership_id
-    WHERE ac.id = p_context_id;
-
-    -- 2. Reject support contexts (support contexts are strictly read-only)
-    PERFORM set_config('archscale.current_context_id', p_context_id::text, true);
-    PERFORM fn_assert_not_support_context();
+    WHERE ac.id = v_context_id;
 
     -- 3. Only business_owner at AAL2 may alter tenant MFA settings
     IF v_role_key <> 'business_owner' THEN
@@ -245,18 +367,15 @@ BEGIN
     SET member_min_aal = p_min_aal, updated_at = now()
     WHERE id = v_org_id;
 
-    -- 5. Audit log entry (ensure GUC is set for fn_audit_append to derive context)
-    PERFORM set_config('archscale.current_context_id', p_context_id::text, true);
+    -- 5. Audit log entry (derived actor from active context)
     PERFORM fn_audit_append(
         'org.mfa.updated',
         'organisations',
         v_org_id::text,
         jsonb_build_object(
             'old_setting', v_old_setting,
-            'new_setting', p_min_aal,
-            'actor_user_id', v_user_id
-        ),
-        v_user_id
+            'new_setting', p_min_aal
+        )
     );
 
     RETURN jsonb_build_object(
@@ -267,33 +386,251 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION fn_set_organisation_mfa_requirement(UUID, TEXT) FROM PUBLIC;
-GRANT  EXECUTE ON FUNCTION fn_set_organisation_mfa_requirement(UUID, TEXT) TO archscale_app_runtime;
+DROP FUNCTION IF EXISTS fn_set_organisation_mfa_requirement(UUID, TEXT);
+REVOKE EXECUTE ON FUNCTION fn_set_organisation_mfa_requirement(TEXT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_set_organisation_mfa_requirement(TEXT) TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 6. RLS Policies on Memberships & Invitations using is_context_valid
+-- 7. RLS Policies on Memberships and Invitations
 -- -----------------------------------------------------------------------------
-DROP POLICY IF EXISTS invitations_context_read_policy ON public.invitations;
-CREATE POLICY invitations_context_read_policy ON public.invitations
-    FOR SELECT TO archscale_app_runtime
-    USING (
-        is_context_valid() AND
-        organisation_id = fn_current_context_org_id()
-    );
-
+-- Direct SELECT on memberships: member sees ONLY their own row
 DROP POLICY IF EXISTS memberships_hierarchy_read_policy ON public.memberships;
-CREATE POLICY memberships_hierarchy_read_policy ON public.memberships
+DROP POLICY IF EXISTS memberships_runtime_policy ON public.memberships;
+CREATE POLICY memberships_runtime_policy ON public.memberships
     FOR SELECT TO archscale_app_runtime
     USING (
-        is_context_valid() AND
-        organisation_id = fn_current_context_org_id()
+        is_context_valid()
+        AND user_id = fn_current_context_user_id()
+        AND organisation_id = fn_current_context_org_id()
     );
 
--- Rate limits table additions for auth rate limits (key, action, counter, reset_at)
+-- Direct SELECT on invitations: user sees ONLY invitations for their email
+DROP POLICY IF EXISTS invitations_context_read_policy ON public.invitations;
+DROP POLICY IF EXISTS invitations_runtime_policy ON public.invitations;
+CREATE POLICY invitations_runtime_policy ON public.invitations
+    FOR SELECT TO archscale_app_runtime
+    USING (
+        is_context_valid()
+        AND lower(email) = (SELECT lower(u.email) FROM public.users u WHERE u.id = fn_current_context_user_id())
+        AND organisation_id = fn_current_context_org_id()
+    );
+
+-- -----------------------------------------------------------------------------
+-- 8. Definer Functions for Listing Org Members and Invitations
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_list_org_members()
+RETURNS TABLE (
+    id UUID,
+    user_id UUID,
+    role_key TEXT,
+    department TEXT,
+    job_role TEXT,
+    reporting_manager_membership_id UUID,
+    status public.membership_status
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_context_id UUID;
+    v_org_id UUID;
+    v_perms TEXT[];
+    v_is_support BOOLEAN;
+BEGIN
+    v_context_id := fn_current_context_id();
+    IF v_context_id IS NULL OR NOT is_context_valid(v_context_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    v_org_id := fn_current_context_org_id();
+
+    SELECT (support_grant_id IS NOT NULL) INTO v_is_support
+    FROM public.access_contexts
+    WHERE id = v_context_id;
+
+    IF NOT COALESCE(v_is_support, false) THEN
+        v_perms := fn_get_effective_permissions();
+        IF NOT ('org.members.read' = ANY(v_perms)) THEN
+            RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.read'
+                USING ERRCODE = '42501';
+        END IF;
+    END IF;
+
+    RETURN QUERY
+    SELECT 
+        m.id,
+        m.user_id,
+        m.role_key,
+        m.department,
+        m.job_role,
+        m.reporting_manager_membership_id,
+        m.status
+    FROM public.memberships m
+    WHERE m.organisation_id = v_org_id
+    ORDER BY m.created_at ASC;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_list_org_members() FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_list_org_members() TO archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_list_org_invitations()
+RETURNS TABLE (
+    id UUID,
+    email TEXT,
+    target_role_key TEXT,
+    department TEXT,
+    job_role TEXT,
+    status TEXT,
+    expires_at TIMESTAMPTZ,
+    sent_at TIMESTAMPTZ
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_context_id UUID;
+    v_org_id UUID;
+    v_perms TEXT[];
+    v_is_support BOOLEAN;
+BEGIN
+    v_context_id := fn_current_context_id();
+    IF v_context_id IS NULL OR NOT is_context_valid(v_context_id) THEN
+        RAISE EXCEPTION 'AUTH_CONTEXT_INVALID: Valid application context required' USING ERRCODE = 'P0001';
+    END IF;
+
+    v_org_id := fn_current_context_org_id();
+
+    SELECT (support_grant_id IS NOT NULL) INTO v_is_support
+    FROM public.access_contexts
+    WHERE id = v_context_id;
+
+    IF NOT COALESCE(v_is_support, false) THEN
+        v_perms := fn_get_effective_permissions();
+        IF NOT ('org.members.invite' = ANY(v_perms)) THEN
+            RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.invite'
+                USING ERRCODE = '42501';
+        END IF;
+    END IF;
+
+    RETURN QUERY
+    SELECT 
+        i.id,
+        i.email,
+        i.target_role_key,
+        i.department,
+        i.job_role,
+        i.status,
+        i.expires_at,
+        i.sent_at
+    FROM public.invitations i
+    WHERE i.organisation_id = v_org_id
+    ORDER BY i.created_at DESC;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_list_org_invitations() FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_list_org_invitations() TO archscale_app_runtime;
+
+-- -----------------------------------------------------------------------------
+-- 9. Rate Limits: Atomic definer function and revoked direct runtime access
+-- -----------------------------------------------------------------------------
 ALTER TABLE public.auth_rate_limits
     ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'signin',
     ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS reset_at TIMESTAMPTZ DEFAULT (now() + interval '15 minutes');
 
+-- Ensure primary key is (key, action)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'auth_rate_limits_pkey'
+    ) THEN
+        ALTER TABLE public.auth_rate_limits DROP CONSTRAINT auth_rate_limits_pkey;
+    END IF;
+    ALTER TABLE public.auth_rate_limits ADD PRIMARY KEY (key, action);
+EXCEPTION WHEN others THEN
+    NULL;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_rate_limits_action_reset ON public.auth_rate_limits(key, action, reset_at);
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.auth_rate_limits TO archscale_app_runtime;
+
+-- Revoke direct DML from runtime
+REVOKE INSERT, UPDATE, DELETE, SELECT ON public.auth_rate_limits FROM archscale_app_runtime;
+
+CREATE OR REPLACE FUNCTION fn_rate_limit_hit(
+    p_key TEXT,
+    p_action TEXT,
+    p_max_attempts INT,
+    p_window_seconds INT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_allowed BOOLEAN;
+    v_now TIMESTAMPTZ := clock_timestamp();
+    v_window INTERVAL := (p_window_seconds || ' seconds')::interval;
+BEGIN
+    -- Strict allowlist check
+    IF p_action NOT IN ('signin', 'recovery', 'mfa_verify', 'invite_resend') THEN
+        RAISE EXCEPTION 'AUTH_RATE_LIMIT_INVALID_ACTION: Action % is not permitted for rate limiting', p_action
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- Atomic single statement upsert: resets if window expired, increments if within window
+    INSERT INTO public.auth_rate_limits (
+        key,
+        action,
+        counter,
+        attempts,
+        window_start,
+        window_expires_at,
+        reset_at,
+        updated_at
+    )
+    VALUES (
+        p_key,
+        p_action,
+        1,
+        1,
+        v_now,
+        v_now + v_window,
+        v_now + v_window,
+        v_now
+    )
+    ON CONFLICT (key, action) DO UPDATE
+    SET
+        attempts = CASE
+            WHEN clock_timestamp() > auth_rate_limits.reset_at THEN 1
+            ELSE auth_rate_limits.attempts + 1
+        END,
+        counter = CASE
+            WHEN clock_timestamp() > auth_rate_limits.reset_at THEN 1
+            ELSE auth_rate_limits.attempts + 1
+        END,
+        window_start = CASE
+            WHEN clock_timestamp() > auth_rate_limits.reset_at THEN clock_timestamp()
+            ELSE auth_rate_limits.window_start
+        END,
+        reset_at = CASE
+            WHEN clock_timestamp() > auth_rate_limits.reset_at THEN clock_timestamp() + v_window
+            ELSE auth_rate_limits.reset_at
+        END,
+        window_expires_at = CASE
+            WHEN clock_timestamp() > auth_rate_limits.reset_at THEN clock_timestamp() + v_window
+            ELSE auth_rate_limits.reset_at
+        END,
+        updated_at = clock_timestamp()
+    RETURNING (attempts <= p_max_attempts) INTO v_allowed;
+
+    RETURN v_allowed;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_rate_limit_hit(TEXT, TEXT, INT, INT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_rate_limit_hit(TEXT, TEXT, INT, INT) TO archscale_app_runtime;
