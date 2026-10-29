@@ -187,6 +187,46 @@ export function createServer(
         });
     });
 
+    // 1c. POST /api/session/reset-password (B0.6: Revoke every session and context of that user)
+    app.post('/api/session/reset-password', async (req: Request, res: Response) => {
+        const { email, newPassword } = req.body || {};
+        if (!email || !newPassword) {
+            return res.status(400).json({ error: 'EMAIL_AND_PASSWORD_REQUIRED' });
+        }
+        try {
+            const idp: IdentityProvider = identityProvider || getIdentityProvider();
+            let userId: string | undefined;
+            if (idp.confirmPasswordReset) {
+                const result = await idp.confirmPasswordReset(email, newPassword);
+                if (result && typeof result === 'object' && 'userId' in result) {
+                    userId = result.userId;
+                }
+            }
+
+            // Invalidate all active contexts in the database for this user
+            const client = await dbPool.connect();
+            try {
+                if (!userId) {
+                    const uRes = await client.query(`SELECT id FROM public.users WHERE lower(email) = lower($1) LIMIT 1;`, [email]);
+                    userId = uRes.rows[0]?.id;
+                }
+                if (userId) {
+                    await client.query(`
+                        UPDATE public.access_contexts
+                        SET revoked_at = now()
+                        WHERE user_id = $1::uuid AND revoked_at IS NULL;
+                    `, [userId]);
+                }
+            } finally {
+                client.release();
+            }
+
+            return res.status(200).json({ success: true, message: 'Password has been reset and all sessions revoked' });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.code || 'RESET_FAILED', message: err.message });
+        }
+    });
+
     // Pre-context & authenticated middleware
     const authenticate = async (req: Request, res: Response, next: NextFunction) => {
         const authHeader = req.headers['authorization'];
@@ -342,6 +382,9 @@ export function createServer(
         try {
             const client = await dbPool.connect();
             try {
+                // B0.3: Mark expired before accept so status = 'Expired' is persisted
+                await client.query(`SELECT fn_mark_invitation_expired($1);`, [token.trim()]);
+
                 const acceptRes = await client.query<{ fn_accept_invitation: string }>(
                     `SELECT fn_accept_invitation($1, $2::uuid);`,
                     [token.trim(), principal.id]
@@ -594,6 +637,63 @@ export function createServer(
         }
     });
 
+    app.post('/api/platform/organisations/:id/approve', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'platform.organisations.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            await client.query(`SELECT fn_platform_approve_organisation($1::uuid, $2);`, [req.params.id, body.reason || 'Approved by platform']);
+            return res.status(200).json({ success: true });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/platform/organisations/:id/invite-admin', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+        const body = req.body || {};
+
+        const decision = await decide(client, principal, contextId, 'platform.organisations.manage', { isMutation: true });
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            const rawToken = crypto.randomBytes(32).toString('base64url');
+            const tokenHash = crypto.createHash('sha256').update(Buffer.from(rawToken, 'utf8')).digest('hex');
+
+            const invRes = await client.query<{ fn_platform_invite_tenant_admin: string }>(
+                `SELECT fn_platform_invite_tenant_admin($1::uuid, $2, $3::timestamptz);`,
+                [req.params.id, body.email, body.invitationExpiresAt || null]
+            );
+            const invitationId = invRes.rows[0]?.fn_platform_invite_tenant_admin;
+
+            // Update token hash directly
+            await client.query(`UPDATE public.invitations SET token_hash = $1 WHERE id = $2::uuid;`, [tokenHash, invitationId]);
+
+            // Dispatch email
+            await sendInvitationMail({
+                to: body.email,
+                rawToken,
+                invitationId,
+                organisationName: 'Your Organisation'
+            });
+
+            await client.query(`SELECT fn_mark_invitation_sent($1::uuid);`, [invitationId]);
+
+            return res.status(200).json({ success: true, invitationId });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
     app.post('/api/platform/support/grants', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
         const contextId: string = (req as any).contextId;
@@ -752,6 +852,27 @@ export function createServer(
         }
     });
 
+    // Frontstage Support Grants List for Tenant Admin (B0.6)
+    app.get('/api/org/support-grants', authenticate, requireContext, async (req: Request, res: Response) => {
+        const principal: VerifiedPrincipal = (req as any).principal;
+        const contextId: string = (req as any).contextId;
+        const client = (req as any).dbClient;
+
+        const decision = await decide(client, principal, contextId, 'org.settings.manage');
+        if (!decision.allow) {
+            return res.status(403).json({ error: decision.reasonCode, decision });
+        }
+        try {
+            const grantsRes = await client.query(`SELECT * FROM fn_list_org_support_grants();`);
+            return res.status(200).json({
+                decision,
+                data: grantsRes.rows
+            });
+        } catch (err: any) {
+            return res.status(400).json({ error: err.message });
+        }
+    });
+
     // --- INVITATIONS (TENANT) ROUTES ---
     app.get('/api/org/invitations', authenticate, requireContext, async (req: Request, res: Response) => {
         const principal: VerifiedPrincipal = (req as any).principal;
@@ -783,7 +904,8 @@ export function createServer(
         const jobRole = body.jobRole || null;
         const reportingManagerMembershipId = body.reportingManagerMembershipId || null;
         const accessProfileId = body.accessProfileId || null;
-        const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+        const invitationExpiresAt = body.invitationExpiresAt ? new Date(body.invitationExpiresAt) : (['intern', 'collaborator', 'guest'].includes(roleKey) ? null : (body.expiresAt ? new Date(body.expiresAt) : null));
+        const membershipExpiresAt = body.membershipExpiresAt ? new Date(body.membershipExpiresAt) : (['intern', 'collaborator', 'guest'].includes(roleKey) && body.expiresAt ? new Date(body.expiresAt) : null);
 
         // Invariant guard: if an injected role or invalid subscriber role is passed
         // in body (e.g. penetration test attempting header/body injection), sanitize or reject
@@ -803,12 +925,13 @@ export function createServer(
 
         // Generate unguessable 256-bit token
         const rawToken = crypto.randomBytes(32).toString('base64url');
-        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+        // B0.4: UTF-8 buffer hashing
+        const tokenHash = crypto.createHash('sha256').update(Buffer.from(rawToken, 'utf8')).digest('hex');
 
         try {
             const invRes = await client.query<{ fn_create_invitation: string }>(`
                 SELECT fn_create_invitation(
-                    $1, $2, $3::uuid, $4, $5, $6::uuid, $7::timestamptz, $8
+                    $1, $2, $3::uuid, $4, $5, $6::uuid, $7::timestamptz, $8::timestamptz, $9
                 );
             `, [
                 email,
@@ -817,7 +940,8 @@ export function createServer(
                 department,
                 jobRole,
                 reportingManagerMembershipId,
-                expiresAt,
+                invitationExpiresAt,
+                membershipExpiresAt,
                 tokenHash
             ]);
             const invitationId = invRes.rows[0]?.fn_create_invitation;

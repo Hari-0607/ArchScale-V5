@@ -431,4 +431,284 @@ describe('Invitations Engine API Integration Tests', () => {
         });
         expect([400, 403]).toContain(acceptRes.status);
     });
+
+    it('9. intern invite without membership_expires_at is rejected (B0.1)', async () => {
+        const res = await fetch(`${baseUrl}/api/org/invitations`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${ownerToken}`,
+                'X-ArchScale-Context': ownerContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                email: 'noexp.intern@inv.local',
+                roleKey: 'intern'
+                // No membershipExpiresAt or expiresAt supplied
+            })
+        });
+        expect(res.status).toBe(400);
+        const err = await res.json();
+        expect(err.error).toMatch(/membership_expires_at|expiry/i);
+    });
+
+    it('10. accepted intern membership ends on the supplied membership_expires_at date (B0.1)', async () => {
+        const INTERN_EMAIL = 'intern.duration@inv.local';
+        const INTERN_USER_ID = '60000000-0000-0000-0000-000000000099';
+        localIdp.registerTestUser({ id: INTERN_USER_ID, email: INTERN_EMAIL, userCode: 'AS-DUR99', password: 'test-password', aal: 'aal1' });
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [INTERN_USER_ID, INTERN_EMAIL]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;`, [INTERN_USER_ID, 'AS-DUR99', INTERN_EMAIL]);
+        const login = await localIdp.signIn({ email: INTERN_EMAIL, password: 'test-password' });
+
+        const membershipExpiry = new Date(Date.now() + 45 * 86400000);
+        const createRes = await fetch(`${baseUrl}/api/org/invitations`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${ownerToken}`,
+                'X-ArchScale-Context': ownerContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                email: INTERN_EMAIL,
+                roleKey: 'intern',
+                invitationExpiresAt: new Date(Date.now() + 5 * 86400000).toISOString(),
+                membershipExpiresAt: membershipExpiry.toISOString()
+            })
+        });
+        expect(createRes.status).toBe(200);
+
+        const sent = getSentMails();
+        const rawToken = sent[sent.length - 1].rawToken;
+
+        const acceptRes = await fetch(`${baseUrl}/api/invitations/accept`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${login.accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: rawToken })
+        });
+        expect(acceptRes.status).toBe(200);
+        const { membershipId } = await acceptRes.json();
+
+        const checkMem = await adminPool.query(`SELECT expires_at FROM public.memberships WHERE id = $1;`, [membershipId]);
+        expect(checkMem.rows[0].expires_at).not.toBeNull();
+        const actualExpiry = new Date(checkMem.rows[0].expires_at).getTime();
+        expect(Math.abs(actualExpiry - membershipExpiry.getTime())).toBeLessThan(5000);
+    });
+
+    it('11. invitation past invitation_expires_at cannot be accepted even if membership date is later (B0.1)', async () => {
+        const PAST_EMAIL = 'past.invite@inv.local';
+        const PAST_USER_ID = '60000000-0000-0000-0000-000000000077';
+        localIdp.registerTestUser({ id: PAST_USER_ID, email: PAST_EMAIL, userCode: 'AS-PST77', password: 'test-password', aal: 'aal1' });
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [PAST_USER_ID, PAST_EMAIL]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;`, [PAST_USER_ID, 'AS-PST77', PAST_EMAIL]);
+        const login = await localIdp.signIn({ email: PAST_EMAIL, password: 'test-password' });
+
+        const rawToken = 'test-past-token-value';
+        const tokenHash = crypto.createHash('sha256').update(Buffer.from(rawToken, 'utf8')).digest('hex');
+
+        // Insert invitation directly with invitation_expires_at in past and membership_expires_at in future
+        await adminPool.query(`
+            INSERT INTO public.invitations (
+                email, organisation_id, target_role_key, invited_by_membership_id,
+                token_hash, invitation_expires_at, membership_expires_at, status
+            ) VALUES (
+                $1, $2, 'intern', (SELECT id FROM public.memberships WHERE user_id = $3 AND organisation_id = $2),
+                $4, now() - interval '2 hours', now() + interval '30 days', 'Sent'
+            );
+        `, [PAST_EMAIL, ORG_ID, USER_OWNER_ID, tokenHash]);
+
+        const acceptRes = await fetch(`${baseUrl}/api/invitations/accept`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${login.accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: rawToken })
+        });
+        expect([400, 403]).toContain(acceptRes.status);
+    });
+
+    it('12. presenting an expired invitation persists status = Expired in DB without rollback (B0.3)', async () => {
+        const EXP_EMAIL = 'persist.expired@inv.local';
+        const rawToken = 'test-expired-persist-token';
+        const tokenHash = crypto.createHash('sha256').update(Buffer.from(rawToken, 'utf8')).digest('hex');
+
+        const insertRes = await adminPool.query(`
+            INSERT INTO public.invitations (
+                email, organisation_id, target_role_key, invited_by_membership_id,
+                token_hash, invitation_expires_at, status
+            ) VALUES (
+                $1, $2, 'executive', (SELECT id FROM public.memberships WHERE user_id = $3 AND organisation_id = $2),
+                $4, now() - interval '10 minutes', 'Sent'
+            ) RETURNING id;
+        `, [EXP_EMAIL, ORG_ID, USER_OWNER_ID, tokenHash]);
+        const invId = insertRes.rows[0].id;
+
+        // Present expired invitation
+        const res = await fetch(`${baseUrl}/api/invitations/accept`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${inviteeToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: rawToken })
+        });
+        expect(res.status).toBe(400);
+
+        // Verify status in DB is persisted as Expired
+        const check = await adminPool.query(`SELECT status FROM public.invitations WHERE id = $1;`, [invId]);
+        expect(check.rows[0].status).toBe('Expired');
+    });
+
+    it('13. token containing every base64url character hashes identically in Node & SQL and accepts successfully (B0.4)', async () => {
+        const B64_TOKEN = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        const nodeHash = crypto.createHash('sha256').update(Buffer.from(B64_TOKEN, 'utf8')).digest('hex');
+
+        // SQL calculation using convert_to(..., 'UTF8')
+        const sqlRes = await adminPool.query(`SELECT encode(sha256(convert_to($1, 'UTF8')), 'hex') AS h;`, [B64_TOKEN]);
+        const sqlHash = sqlRes.rows[0].h;
+        expect(nodeHash).toBe(sqlHash);
+
+        const B64_EMAIL = 'b64url.user@inv.local';
+        const B64_USER_ID = '60000000-0000-0000-0000-000000000066';
+        localIdp.registerTestUser({ id: B64_USER_ID, email: B64_EMAIL, userCode: 'AS-B6401', password: 'test-password', aal: 'aal1' });
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [B64_USER_ID, B64_EMAIL]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;`, [B64_USER_ID, 'AS-B6401', B64_EMAIL]);
+        const login = await localIdp.signIn({ email: B64_EMAIL, password: 'test-password' });
+
+        await adminPool.query(`
+            INSERT INTO public.invitations (
+                email, organisation_id, target_role_key, invited_by_membership_id,
+                token_hash, invitation_expires_at, status
+            ) VALUES (
+                $1, $2, 'executive', (SELECT id FROM public.memberships WHERE user_id = $3 AND organisation_id = $2),
+                $4, now() + interval '7 days', 'Sent'
+            );
+        `, [B64_EMAIL, ORG_ID, USER_OWNER_ID, sqlHash]);
+
+        const acceptRes = await fetch(`${baseUrl}/api/invitations/accept`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${login.accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: B64_TOKEN })
+        });
+        expect(acceptRes.status).toBe(200);
+    });
+
+    it('14. mail sink invite link uses fragment (#token=...), not query string (B0.5)', async () => {
+        const FRAG_EMAIL = 'frag.check@inv.local';
+        const res = await fetch(`${baseUrl}/api/org/invitations`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${ownerToken}`,
+                'X-ArchScale-Context': ownerContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                email: FRAG_EMAIL,
+                roleKey: 'executive'
+            })
+        });
+        expect(res.status).toBe(200);
+
+        const sent = getSentMails();
+        const latest = sent[sent.length - 1];
+        expect(latest.inviteUrl).toContain('#token=');
+        expect(latest.inviteUrl).not.toContain('?token=');
+        expect(latest.body).toContain('#token=');
+        expect(latest.body).not.toContain('?token=');
+    });
+
+    it('15. inviter suspended after sending then accept fails (B0.6 item 4)', async () => {
+        const SUSP_INV_EMAIL = 'susp.inviter@inv.local';
+        const SUSP_INV_ID = '60000000-0000-0000-0000-000000000044';
+        localIdp.registerTestUser({ id: SUSP_INV_ID, email: SUSP_INV_EMAIL, userCode: 'AS-SSP01', password: 'test-password', aal: 'aal1' });
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [SUSP_INV_ID, SUSP_INV_EMAIL]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;`, [SUSP_INV_ID, 'AS-SSP01', SUSP_INV_EMAIL]);
+        const login = await localIdp.signIn({ email: SUSP_INV_EMAIL, password: 'test-password' });
+
+        // Leader creates invitation
+        // First grant leader org.members.invite for this test
+        await adminPool.query(`
+            INSERT INTO public.role_permissions (role_key, permission_key)
+            VALUES ('leader', 'org.members.invite') ON CONFLICT DO NOTHING;
+        `);
+
+        const createRes = await fetch(`${baseUrl}/api/org/invitations`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${leaderToken}`,
+                'X-ArchScale-Context': leaderContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                email: SUSP_INV_EMAIL,
+                roleKey: 'executive'
+            })
+        });
+        expect(createRes.status).toBe(200);
+
+        const sent = getSentMails();
+        const rawToken = sent[sent.length - 1].rawToken;
+
+        // Suspend the leader who sent the invitation
+        await adminPool.query(`
+            UPDATE public.memberships
+            SET status = 'SUSPENDED'
+            WHERE user_id = $1 AND organisation_id = $2;
+        `, [USER_LEADER_ID, ORG_ID]);
+
+        // Invitee attempts to accept
+        const acceptRes = await fetch(`${baseUrl}/api/invitations/accept`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${login.accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: rawToken })
+        });
+        expect(acceptRes.status).toBe(400);
+        const data = await acceptRes.json();
+        expect(data.message).toMatch(/AUTH_INVITATION_INVITER_INACTIVE/i);
+
+        // Restore leader status for subsequent tests
+        await adminPool.query(`
+            UPDATE public.memberships
+            SET status = 'ACTIVE'
+            WHERE user_id = $1 AND organisation_id = $2;
+        `, [USER_LEADER_ID, ORG_ID]);
+    });
+
+    it('16. invite beyond seats fails at acceptance with no membership left behind (B0.6 item 5)', async () => {
+        const SEAT_EMAIL = 'seat.overflow@inv.local';
+        const SEAT_USER_ID = '60000000-0000-0000-0000-000000000033';
+        localIdp.registerTestUser({ id: SEAT_USER_ID, email: SEAT_EMAIL, userCode: 'AS-SOT01', password: 'test-password', aal: 'aal1' });
+        await adminPool.query(`INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING;`, [SEAT_USER_ID, SEAT_EMAIL]);
+        await adminPool.query(`INSERT INTO public.users (id, user_code, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;`, [SEAT_USER_ID, 'AS-SOT01', SEAT_EMAIL]);
+        const login = await localIdp.signIn({ email: SEAT_EMAIL, password: 'test-password' });
+
+        const createRes = await fetch(`${baseUrl}/api/org/invitations`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${ownerToken}`,
+                'X-ArchScale-Context': ownerContextId,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                email: SEAT_EMAIL,
+                roleKey: 'executive'
+            })
+        });
+        expect(createRes.status).toBe(200);
+
+        const sent = getSentMails();
+        const rawToken = sent[sent.length - 1].rawToken;
+
+        // Set subscription_seats for executive to limit 0
+        await adminPool.query(`
+            INSERT INTO public.subscription_seats (organisation_id, role_key, seat_limit, allocated_seats)
+            VALUES ($1, 'executive', 0, 0)
+            ON CONFLICT (organisation_id, role_key) DO UPDATE SET seat_limit = 0, allocated_seats = 0;
+        `, [ORG_ID]);
+
+        // Attempt to accept
+        const acceptRes = await fetch(`${baseUrl}/api/invitations/accept`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${login.accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: rawToken })
+        });
+        expect([400, 403, 409]).toContain(acceptRes.status);
+
+        // Verify no membership was left behind
+        const checkMem = await adminPool.query(`SELECT COUNT(*) AS count FROM public.memberships WHERE user_id = $1 AND organisation_id = $2;`, [SEAT_USER_ID, ORG_ID]);
+        expect(parseInt(checkMem.rows[0].count, 10)).toBe(0);
+    });
 });
