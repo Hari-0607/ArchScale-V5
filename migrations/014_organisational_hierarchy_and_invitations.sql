@@ -1157,7 +1157,8 @@ BEGIN
             'membership_id', v_membership_id,
             'user_id', p_user_id,
             'organisation_id', v_inv.organisation_id
-        )
+        ),
+        p_user_id
     );
 
     RETURN v_membership_id;
