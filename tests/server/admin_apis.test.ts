@@ -248,6 +248,21 @@ describe('Frontstage Tenant Administration APIs (A5)', () => {
         const check = await adminPool.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [SUB_ORG_ID]);
         expect(check.rows[0].member_min_aal).toBe('aal2');
     });
+
+    it('5b. GET /api/org/support-grants allows tenant admin to view support grants (B0.6)', async () => {
+        const res = await fetch(`${baseUrl}/api/org/support-grants`, {
+            headers: {
+                'Authorization': `Bearer ${ownerToken}`,
+                'X-ArchScale-Context': ownerContextId
+            }
+        });
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.data).toBeInstanceOf(Array);
+        expect(data.data.length).toBeGreaterThanOrEqual(1);
+        expect(data.data[0]).toHaveProperty('reason');
+        expect(data.data[0]).toHaveProperty('expires_at');
+    });
 });
 
 describe('Backstage Platform Administration APIs (A5)', () => {
@@ -453,20 +468,5 @@ describe('A6 Verification Tests: Boundaries & Invariants', () => {
         const check = await adminPool.query(`SELECT target_role_key, status FROM public.invitations WHERE id = $1;`, [invitationId]);
         expect(check.rows[0].target_role_key).toBe('business_owner');
         expect(check.rows[0].status).toBe('Sent');
-    });
-
-    it('17. GET /api/org/support-grants allows tenant admin to view support grants (B0.6)', async () => {
-        const res = await fetch(`${baseUrl}/api/org/support-grants`, {
-            headers: {
-                'Authorization': `Bearer ${ownerToken}`,
-                'X-ArchScale-Context': ownerContextId
-            }
-        });
-        expect(res.status).toBe(200);
-        const data = await res.json();
-        expect(data.data).toBeInstanceOf(Array);
-        expect(data.data.length).toBeGreaterThanOrEqual(1);
-        expect(data.data[0]).toHaveProperty('reason');
-        expect(data.data[0]).toHaveProperty('expires_at');
     });
 });
