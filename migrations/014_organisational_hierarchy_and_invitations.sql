@@ -41,7 +41,7 @@ ALTER TABLE public.memberships
 CREATE INDEX IF NOT EXISTS idx_memberships_department ON public.memberships(organisation_id, department);
 CREATE INDEX IF NOT EXISTS idx_memberships_reporting ON public.memberships(reporting_manager_membership_id);
 
--- Constraint: Manager cannot be self
+    -- Constraint: Manager cannot be self
 ALTER TABLE public.memberships
     DROP CONSTRAINT IF EXISTS chk_membership_reporting_not_self;
 ALTER TABLE public.memberships
@@ -60,6 +60,11 @@ DECLARE
     v_depth INT := 0;
 BEGIN
     IF NEW.reporting_manager_membership_id IS NOT NULL THEN
+        -- 0. Check not self
+        IF NEW.reporting_manager_membership_id = NEW.id THEN
+            RAISE EXCEPTION 'chk_membership_reporting_not_self: Reporting manager cannot be self'
+                USING ERRCODE = 'P0001';
+        END IF;
         -- 1. Manager must belong to same organisation and be ACTIVE
         SELECT organisation_id, status
         INTO v_mgr_org_id, v_mgr_status
@@ -242,17 +247,18 @@ BEGIN
     SET member_min_aal = p_min_aal, updated_at = now()
     WHERE id = v_org_id;
 
-    -- 5. Audit log entry
+    -- 5. Audit log entry (ensure GUC is set for fn_audit_append to derive context)
+    PERFORM set_config('archscale.current_context_id', p_context_id::text, true);
     PERFORM fn_audit_append(
         'org.mfa.updated',
-        p_context_id,
         'organisations',
-        v_org_id,
+        v_org_id::text,
         jsonb_build_object(
             'old_setting', v_old_setting,
             'new_setting', p_min_aal,
             'actor_user_id', v_user_id
-        )
+        ),
+        v_user_id
     );
 
     RETURN jsonb_build_object(
