@@ -27,7 +27,7 @@
 -- 1. Organisation additions: member_min_aal
 -- -----------------------------------------------------------------------------
 ALTER TABLE public.organisations
-    ADD COLUMN IF NOT EXISTS member_min_aal TEXT NOT NULL DEFAULT 'aal2'
+    ADD COLUMN IF NOT EXISTS member_min_aal TEXT NOT NULL DEFAULT 'aal1'
     CHECK (member_min_aal IN ('aal1', 'aal2'));
 
 -- -----------------------------------------------------------------------------

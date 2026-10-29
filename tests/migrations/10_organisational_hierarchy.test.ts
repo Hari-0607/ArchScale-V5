@@ -225,10 +225,10 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `, [ORG_A_ID, USER_OWNER_ID, ownerMembershipId])).rejects.toThrow(/unique|uq_invitations_pending/i);
     });
 
-    it('6. organisations.member_min_aal: default is aal2 and only business_owner at aal2 can change it', async () => {
+    it('6. organisations.member_min_aal: default is aal1 and only business_owner at aal2 can change it', async () => {
         // Check default
         const orgRes = await adminPool.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [ORG_A_ID]);
-        expect(orgRes.rows[0].member_min_aal).toBe('aal2');
+        expect(orgRes.rows[0].member_min_aal).toBe('aal1');
 
         // Create aal1 context for owner
         const ctxAal1Res = await adminPool.query(`
@@ -238,7 +238,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
 
         // fn_set_organisation_mfa_requirement via aal1 context fails
         await expect(adminPool.query(`
-            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal1');
+            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal2');
         `, [ctxAal1Id])).rejects.toThrow(/aal2|AUTH_AAL/i);
 
         // Create aal2 context for owner
@@ -247,17 +247,17 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
         const ctxAal2Id = ctxAal2Res.rows[0].fn_create_access_context;
 
-        // Change setting to aal1 via aal2 context succeeds
+        // Change setting to aal2 via aal2 context succeeds
         await adminPool.query(`
-            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal1');
+            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal2');
         `, [ctxAal2Id]);
 
         const updated = await adminPool.query(`SELECT member_min_aal FROM public.organisations WHERE id = $1;`, [ORG_A_ID]);
-        expect(updated.rows[0].member_min_aal).toBe('aal1');
+        expect(updated.rows[0].member_min_aal).toBe('aal2');
 
-        // Reset back to aal2
+        // Reset back to aal1
         await adminPool.query(`
-            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal2');
+            SELECT fn_set_organisation_mfa_requirement($1::uuid, 'aal1');
         `, [ctxAal2Id]);
     });
 
