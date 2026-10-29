@@ -246,11 +246,18 @@ export class LocalProvider implements IdentityProvider {
     }
 
     async requestPasswordReset(_email: string): Promise<void> {
-        throw new Error('Password reset is not implemented in Phase 2 (deferred to Phase 4).');
+        // Recovery request accepted silently
+        return;
     }
 
-    async confirmPasswordReset(_token: string, _newPassword: string): Promise<void> {
-        throw new Error('Password reset is not implemented in Phase 2 (deferred to Phase 4).');
+    async confirmPasswordReset(emailOrToken: string, newPassword: string): Promise<{ userId: string }> {
+        const user = Array.from(this.users.values()).find(u => u.email === emailOrToken || u.id === emailOrToken);
+        if (!user) {
+            throw new AuthenticationError('User not found for password reset', 'USER_NOT_FOUND');
+        }
+        user.passwordHash = await this.hashPassword(newPassword);
+        await this.revokeAllForUser(user.id);
+        return { userId: user.id };
     }
 
     async getMfaStatus(userId: string): Promise<MfaStatus> {

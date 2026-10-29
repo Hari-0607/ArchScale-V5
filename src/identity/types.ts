@@ -79,7 +79,7 @@ export interface IdentityProvider {
      * Password recovery contract (Phase 4 deferred implementation).
      */
     requestPasswordReset(email: string): Promise<void>;
-    confirmPasswordReset(token: string, newPassword: string): Promise<void>;
+    confirmPasswordReset(token: string, newPassword: string): Promise<{ userId: string } | void>;
 
     /**
      * Multi-factor authentication (MFA) status and verification.

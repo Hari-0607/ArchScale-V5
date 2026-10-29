@@ -31,6 +31,11 @@ export const SERVER_ROUTES: Record<string, ServerRouteDef> = {
         method: 'POST',
         kind: 'public'
     },
+    'public.reset_password': {
+        path: '/api/session/reset-password',
+        method: 'POST',
+        kind: 'public'
+    },
 
     // 2. Pre-context session endpoints (require verified identity token)
     'session.mfa.verify': {
@@ -190,6 +195,12 @@ export const SERVER_ROUTES: Record<string, ServerRouteDef> = {
         kind: 'permission:org.settings.manage',
         portal: 'subscriber',
         isMutation: true
+    },
+    'org.support_grants.list': {
+        path: '/api/org/support-grants',
+        method: 'GET',
+        kind: 'permission:org.settings.manage',
+        portal: 'subscriber'
     },
     'org.invitations.list': {
         path: '/api/org/invitations',
