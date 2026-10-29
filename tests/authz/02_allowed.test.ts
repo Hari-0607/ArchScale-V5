@@ -63,12 +63,12 @@ beforeAll(async () => {
         );
     }
 
-    // Seed Organisations
+    // Seed Organisations (explicitly aal1 to test that leader at aal1 is allowed, while business_owner remains protected at aal2)
     await adminPool.query(`
-        INSERT INTO public.organisations (id, name, portal, tenant_type_key, status)
+        INSERT INTO public.organisations (id, name, portal, tenant_type_key, status, member_min_aal)
         VALUES 
-            ($1, 'Subscriber Org A', 'subscriber', 'studio_owner', 'ACTIVE'),
-            ($2, 'Subscriber Org B', 'subscriber', 'studio_owner', 'ACTIVE')
+            ($1, 'Subscriber Org A', 'subscriber', 'studio_owner', 'ACTIVE', 'aal1'),
+            ($2, 'Subscriber Org B', 'subscriber', 'studio_owner', 'ACTIVE', 'aal1')
         ON CONFLICT (id) DO NOTHING;
     `, [SUBSCRIBER_ORG_A_ID, SUBSCRIBER_ORG_B_ID]);
 
