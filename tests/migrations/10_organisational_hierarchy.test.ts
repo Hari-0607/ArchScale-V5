@@ -455,22 +455,22 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         }
     });
 
-    it('8. RLS: member sees only their own membership row and only their own invitations', async () => {
+    it('8. RLS: member sees only their own membership row; direct invitations SELECT is revoked and token_hash is never exposed', async () => {
         // Set context for intern on runtime client inside transaction
         const internCtxRes = await adminPool.query(`
             SELECT fn_create_access_context($1::uuid, 'sess_intern_rls', $2::uuid, $3::uuid, 'aal2');
         `, [USER_INTERN_ID, ORG_A_ID, workspaceAId]);
         const internCtxId = internCtxRes.rows[0].fn_create_access_context;
 
-        // Add invitation for intern and invitation for someone else
+        // Add invitation
         await adminPool.query(`
             INSERT INTO public.invitations (
-                organisation_id, email, token_hash, target_role_key, invited_by, expires_at, status
+                organisation_id, email, token_hash, target_role_key, invited_by_membership_id, expires_at, status
             ) VALUES 
                 ($1, 'intern@studio.test', 'hash_intern_rls', 'intern', $2, now() + interval '7 days', 'Pending'),
                 ($1, 'secret@studio.test', 'hash_secret_rls', 'executive', $2, now() + interval '7 days', 'Pending')
             ON CONFLICT DO NOTHING;
-        `, [ORG_A_ID, USER_OWNER_ID]);
+        `, [ORG_A_ID, ownerMembershipId]);
 
         const client = await runtimePool.connect();
         try {
@@ -482,14 +482,37 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
             expect(memRows.rowCount).toBe(1);
             expect(memRows.rows[0].user_id).toBe(USER_INTERN_ID);
 
-            // Direct SELECT on invitations returns ONLY invitations for intern's email
-            const invRows = await client.query(`SELECT id, email FROM public.invitations;`);
-            expect(invRows.rowCount).toBe(1);
-            expect(invRows.rows[0].email).toBe('intern@studio.test');
+            // Direct SELECT on invitations by runtime client is completely REVOKED (fails with permission denied)
+            await expect(client.query(`SELECT * FROM public.invitations;`)).rejects.toThrow(/permission denied/i);
 
             await client.query('COMMIT;');
         } finally {
             client.release();
+        }
+
+        // Test that fn_list_org_invitations never returns token_hash
+        const ownerCtxRes = await adminPool.query(`
+            SELECT fn_create_access_context($1::uuid, 'sess_owner_check_cols', $2::uuid, $3::uuid, 'aal2');
+        `, [USER_OWNER_ID, ORG_A_ID, workspaceAId]);
+        const ownerCtxId = ownerCtxRes.rows[0].fn_create_access_context;
+
+        const ownerClient = await runtimePool.connect();
+        try {
+            await ownerClient.query('BEGIN;');
+            await ownerClient.query(`SELECT fn_set_app_context($1::uuid, $2::uuid, $3::text);`, [ownerCtxId, USER_OWNER_ID, 'sess_owner_check_cols']);
+
+            const invRows = await ownerClient.query(`SELECT * FROM fn_list_org_invitations();`);
+            expect(invRows.rowCount).toBeGreaterThan(0);
+            const firstRow = invRows.rows[0];
+            expect(firstRow).toHaveProperty('id');
+            expect(firstRow).toHaveProperty('email');
+            expect(firstRow).toHaveProperty('target_role_key');
+            expect(firstRow).not.toHaveProperty('token_hash');
+            expect(firstRow).not.toHaveProperty('token');
+
+            await ownerClient.query('COMMIT;');
+        } finally {
+            ownerClient.release();
         }
     });
 
