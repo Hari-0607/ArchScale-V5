@@ -846,6 +846,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
                     'Engineering',
                     'Junior Intern',
                     $1::uuid,
+                    now() + interval '7 days',
                     now() + interval '30 days',
                     $2
                 );
@@ -926,7 +927,7 @@ describe('Migration 014: Hierarchy, Invariants and Policies', () => {
         const auditRuntimePool = new pg.Pool(RUNTIME_CONFIG);
         try {
             await expect(auditRuntimePool.query(
-                `SELECT fn_audit_append('invitation.accepted', 'invitations', 'forged-id');`
+                `SELECT fn_audit_append('invitation.accepted'::text, 'invitations'::text, 'forged-id'::text, NULL::jsonb, NULL::uuid);`
             )).rejects.toThrow(/AUTH_AUDIT_UNAUTHORIZED/i);
         } finally {
             await auditRuntimePool.end();
