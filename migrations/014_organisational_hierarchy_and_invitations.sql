@@ -277,7 +277,30 @@ CREATE UNIQUE INDEX uq_invitations_pending_org_email
     WHERE status IN ('Pending', 'Sent');
 
 -- -----------------------------------------------------------------------------
--- 5. Effective Permissions Calculation (Roles + Access Profiles)
+-- 5. Seed Permissions & Roles for MFA, Admin, and Support
+-- -----------------------------------------------------------------------------
+INSERT INTO public.permissions (key, name, description, min_aal)
+VALUES 
+    ('org.settings.manage', 'Manage Organisation Settings', 'Manage organisation security settings and MFA requirements', 'aal2'),
+    ('org.members.manage', 'Manage Members', 'Change member roles, suspend, or reactivate memberships', 'aal2'),
+    ('platform.support.read', 'Support Read Access', 'Read-only inspection access during active support grant', 'aal2'),
+    ('platform.support.manage', 'Manage Support Grants', 'Issue and revoke platform support grants', 'aal2'),
+    ('platform.organisations.manage', 'Manage Platform Organisations', 'Create, approve, and suspend organisations', 'aal2')
+ON CONFLICT (key) DO UPDATE SET min_aal = EXCLUDED.min_aal;
+
+INSERT INTO public.role_permissions (role_key, permission_key)
+VALUES 
+    ('business_owner', 'org.settings.manage'),
+    ('business_owner', 'org.members.manage'),
+    ('founder', 'platform.support.read'),
+    ('founder', 'platform.support.manage'),
+    ('founder', 'platform.organisations.manage'),
+    ('client_servicing', 'platform.support.read'),
+    ('client_servicing', 'platform.support.manage')
+ON CONFLICT (role_key, permission_key) DO NOTHING;
+
+-- -----------------------------------------------------------------------------
+-- 6. Effective Permissions Calculation (Roles + Access Profiles)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_get_effective_permissions(p_membership_id UUID DEFAULT NULL)
 RETURNS TEXT[]
@@ -290,9 +313,12 @@ DECLARE
     v_target_mem_id UUID;
     v_ctx_id UUID;
     v_caller_org_id UUID;
+    v_caller_mem_id UUID;
     v_mem_org_id UUID;
     v_role_key TEXT;
     v_profile_id UUID;
+    v_mem_status public.membership_status;
+    v_mem_expires_at TIMESTAMPTZ;
     v_perms TEXT[];
 BEGIN
     v_ctx_id := fn_current_context_id();
@@ -301,9 +327,10 @@ BEGIN
     END IF;
 
     v_caller_org_id := fn_current_context_org_id();
+    v_caller_mem_id := fn_current_context_membership_id();
 
     IF p_membership_id IS NULL THEN
-        v_target_mem_id := fn_current_context_membership_id();
+        v_target_mem_id := v_caller_mem_id;
     ELSE
         v_target_mem_id := p_membership_id;
     END IF;
@@ -313,14 +340,33 @@ BEGIN
     END IF;
 
     -- Fetch membership, ensuring it belongs to caller's active organisation
-    SELECT organisation_id, role_key, profile_id
-    INTO v_mem_org_id, v_role_key, v_profile_id
+    SELECT organisation_id, role_key, profile_id, status, expires_at
+    INTO v_mem_org_id, v_role_key, v_profile_id, v_mem_status, v_mem_expires_at
     FROM public.memberships
     WHERE id = v_target_mem_id;
 
     -- If membership not found or belongs to another organisation, return empty
     IF v_mem_org_id IS NULL OR v_mem_org_id <> v_caller_org_id THEN
         RETURN '{}'::TEXT[];
+    END IF;
+
+    -- If target membership is not ACTIVE or is expired, return empty list
+    IF v_mem_status <> 'ACTIVE' OR (v_mem_expires_at IS NOT NULL AND v_mem_expires_at <= now()) THEN
+        RETURN '{}'::TEXT[];
+    END IF;
+
+    -- F5: If inspecting another member's permissions, caller must hold org.members.read
+    IF v_target_mem_id <> v_caller_mem_id THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.access_contexts ac
+            JOIN public.memberships cm ON cm.id = ac.membership_id
+            LEFT JOIN public.role_permissions crp ON crp.role_key = cm.role_key AND crp.permission_key = 'org.members.read'
+            LEFT JOIN public.access_profile_permissions capp ON capp.profile_id = cm.profile_id AND capp.permission_key = 'org.members.read'
+            WHERE ac.id = v_ctx_id
+              AND (crp.permission_key IS NOT NULL OR capp.permission_key IS NOT NULL)
+        ) THEN
+            RETURN '{}'::TEXT[];
+        END IF;
     END IF;
 
     -- Union of base role permissions and profile permissions
@@ -346,7 +392,7 @@ REVOKE EXECUTE ON FUNCTION fn_get_effective_permissions(UUID) FROM PUBLIC;
 GRANT  EXECUTE ON FUNCTION fn_get_effective_permissions(UUID) TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 6. Organization MFA Requirement Setting Function
+-- 7. Organization MFA Requirement Setting Function (F3)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_set_organisation_mfa_requirement(
     p_min_aal TEXT
@@ -379,9 +425,9 @@ BEGIN
     JOIN public.memberships m ON m.id = ac.membership_id
     WHERE ac.id = v_context_id;
 
-    -- 3. Only business_owner at AAL2 may alter tenant MFA settings
-    IF v_role_key <> 'business_owner' THEN
-        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Only business_owner may change tenant MFA setting'
+    -- 3. F3: Permission check org.settings.manage (seeded for business_owner)
+    IF NOT ('org.settings.manage' = ANY(fn_get_effective_permissions())) THEN
+        RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.settings.manage'
             USING ERRCODE = '42501';
     END IF;
 
@@ -425,7 +471,7 @@ REVOKE EXECUTE ON FUNCTION fn_set_organisation_mfa_requirement(TEXT) FROM PUBLIC
 GRANT  EXECUTE ON FUNCTION fn_set_organisation_mfa_requirement(TEXT) TO archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 7. RLS Policies on Memberships and Invitations
+-- 8. RLS Policies on Memberships and Invitations
 -- -----------------------------------------------------------------------------
 -- Direct SELECT on memberships: member sees ONLY their own row
 DROP POLICY IF EXISTS memberships_hierarchy_read_policy ON public.memberships;
@@ -444,7 +490,7 @@ DROP POLICY IF EXISTS invitations_runtime_policy ON public.invitations;
 REVOKE ALL ON public.invitations FROM PUBLIC, archscale_app_runtime;
 
 -- -----------------------------------------------------------------------------
--- 8. Definer Functions for Listing Org Members and Invitations
+-- 9. Definer Functions for Listing Org Members and Invitations (F4)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_list_org_members()
 RETURNS TABLE (
@@ -477,7 +523,22 @@ BEGIN
     FROM public.access_contexts ac
     WHERE ac.id = v_context_id;
 
-    IF NOT COALESCE(v_is_support, false) THEN
+    -- F4: Support contexts require platform.support.read on platform membership
+    IF COALESCE(v_is_support, false) THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM public.access_contexts ac
+            JOIN public.support_access_grants sag ON sag.id = ac.support_grant_id
+            JOIN public.memberships sm ON sm.user_id = ac.user_id AND sm.organisation_id = '00000000-0000-0000-0000-000000000001'::uuid
+            JOIN public.role_permissions srp ON srp.role_key = sm.role_key
+            WHERE ac.id = v_context_id
+              AND sm.status = 'ACTIVE'
+              AND srp.permission_key = 'platform.support.read'
+        ) THEN
+            RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Support context requires platform.support.read'
+                USING ERRCODE = '42501';
+        END IF;
+    ELSE
         v_perms := fn_get_effective_permissions();
         IF NOT ('org.members.read' = ANY(v_perms)) THEN
             RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.read'
@@ -535,7 +596,22 @@ BEGIN
     FROM public.access_contexts ac
     WHERE ac.id = v_context_id;
 
-    IF NOT COALESCE(v_is_support, false) THEN
+    -- F4: Support contexts require platform.support.read on platform membership
+    IF COALESCE(v_is_support, false) THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM public.access_contexts ac
+            JOIN public.support_access_grants sag ON sag.id = ac.support_grant_id
+            JOIN public.memberships sm ON sm.user_id = ac.user_id AND sm.organisation_id = '00000000-0000-0000-0000-000000000001'::uuid
+            JOIN public.role_permissions srp ON srp.role_key = sm.role_key
+            WHERE ac.id = v_context_id
+              AND sm.status = 'ACTIVE'
+              AND srp.permission_key = 'platform.support.read'
+        ) THEN
+            RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Support context requires platform.support.read'
+                USING ERRCODE = '42501';
+        END IF;
+    ELSE
         v_perms := fn_get_effective_permissions();
         IF NOT ('org.members.invite' = ANY(v_perms)) THEN
             RAISE EXCEPTION 'AUTH_PERMISSION_DENIED: Missing required permission org.members.invite'
@@ -548,6 +624,19 @@ BEGIN
         i.id,
         i.email,
         i.target_role_key,
+        i.department,
+        i.job_role,
+        i.status,
+        i.expires_at,
+        i.sent_at
+    FROM public.invitations i
+    WHERE i.organisation_id = v_org_id
+    ORDER BY i.created_at DESC;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION fn_list_org_invitations() FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION fn_list_org_invitations() TO archscale_app_runtime;
         i.department,
         i.job_role,
         i.status,

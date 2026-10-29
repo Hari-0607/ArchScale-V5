@@ -481,4 +481,28 @@ describe('Authorization Denial Gates (decide)', () => {
             client.release();
         }
     });
+
+    it('Gate 8: Fails closed (AUTH_PERMISSION) when permission key does not exist (F1)', async () => {
+        const client = await adminPool.connect();
+        try {
+            const principal: VerifiedPrincipal = {
+                id: USER_ALICE_ID,
+                email: 'alice@test.local',
+                sessionId: SESSION_ALICE,
+                aal: 'aal2',
+                issuer: 'test',
+                audience: 'test',
+                expiresAt: Math.floor(Date.now() / 1000) + 3600
+            };
+
+            const decision = await decide(client, principal, validContextId, 'test.nonexistent.permission');
+            expect(decision.allow).toBe(false);
+            if (!decision.allow) {
+                expect(decision.gateFailed).toBe(8);
+                expect(decision.reasonCode).toBe('AUTH_PERMISSION');
+            }
+        } finally {
+            client.release();
+        }
+    });
 });
