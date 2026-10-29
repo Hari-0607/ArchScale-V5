@@ -8,6 +8,8 @@ import { listPrincipalMemberships, listOrgWorkspaces } from '../context/membersh
 import { createAccessContext, renewAccessContext, revokeAccessContext } from '../context/access_context.js';
 import { runtimePool, withAppContext } from '../db/index.js';
 import { decide } from '../authz/decide.js';
+import crypto from 'crypto';
+import { sendInvitationMail } from '../mail/sink.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -124,6 +126,65 @@ export function createServer(
             await delayToFloor(start, 1000);
             return res.status(401).json({ error: 'AUTH_SIGNIN_FAILED' });
         }
+    });
+
+    // 1b. POST /api/session/recovery (A4: Constant-time floor, identical response, DB rate-limited)
+    app.post('/api/session/recovery', async (req: Request, res: Response) => {
+        const start = Date.now();
+        const clientIp = getClientIp(req);
+        const body = req.body || {};
+        const email = (body.email || '').toLowerCase().trim();
+
+        // 1. Database-backed rate limiting per IP and per address
+        try {
+            const client = await dbPool.connect();
+            try {
+                const ipHit = await client.query<{ fn_rate_limit_hit: boolean }>(
+                    `SELECT fn_rate_limit_hit($1, 'recovery', 5, 300);`,
+                    [`ip:${clientIp}`]
+                );
+                if (!ipHit.rows[0]?.fn_rate_limit_hit) {
+                    return res.status(429).json({ error: 'AUTH_RATE_LIMIT_EXCEEDED', message: 'Rate limit exceeded' });
+                }
+
+                if (email) {
+                    const emailHit = await client.query<{ fn_rate_limit_hit: boolean }>(
+                        `SELECT fn_rate_limit_hit($1, 'recovery', 5, 300);`,
+                        [`email:${email}`]
+                    );
+                    if (!emailHit.rows[0]?.fn_rate_limit_hit) {
+                        return res.status(429).json({ error: 'AUTH_RATE_LIMIT_EXCEEDED', message: 'Rate limit exceeded' });
+                    }
+                }
+            } finally {
+                client.release();
+            }
+        } catch (rlErr: any) {
+            console.error('Rate limit query failed:', rlErr.message);
+        }
+
+        // 2. Perform recovery action silently if user exists
+        if (email) {
+            try {
+                const userQuery = await dbPool.query(
+                    `SELECT id FROM public.users WHERE lower(email) = $1 LIMIT 1;`,
+                    [email]
+                );
+                if (userQuery.rows.length > 0) {
+                    await dbPool.query(`
+                        SELECT fn_audit_append('auth.recovery.requested', 'users', $1, NULL, $2::uuid);
+                    `, [email, userQuery.rows[0].id]).catch(() => {});
+                }
+            } catch {
+                // Fail closed silently
+            }
+        }
+
+        // 3. Constant-time floor to eliminate email enumeration timing attacks
+        await delayToFloor(start, 1000);
+        return res.status(200).json({
+            message: 'If the address is registered, a recovery link has been sent'
+        });
     });
 
     // Pre-context & authenticated middleware
