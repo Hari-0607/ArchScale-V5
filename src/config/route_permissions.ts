@@ -63,6 +63,26 @@ export const SERVER_ROUTES: Record<string, ServerRouteDef> = {
         method: 'POST',
         kind: 'session'
     },
+    'session.invitations.accept': {
+        path: '/api/invitations/accept',
+        method: 'POST',
+        kind: 'session'
+    },
+    'session.me.sessions.list': {
+        path: '/api/me/sessions',
+        method: 'GET',
+        kind: 'session'
+    },
+    'session.me.sessions.delete_one': {
+        path: '/api/me/sessions/:id',
+        method: 'DELETE',
+        kind: 'session'
+    },
+    'session.me.sessions.delete_all': {
+        path: '/api/me/sessions',
+        method: 'DELETE',
+        kind: 'session'
+    },
 
     // 3. Authenticated context endpoints (require valid X-ArchScale-Context)
     'context.me': {
