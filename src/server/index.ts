@@ -122,7 +122,7 @@ export function createServer(
             }
 
             const baseKey = key === 'founder' ? 'founder' : 'business_owner';
-            const configuredDemoUser = localDevelopment && key !== 'founder'
+            const configuredDemoUser = localDevelopment
                 && process.env.ARCHSCALE_LOCAL_DEMO_EMAIL
                 && process.env.ARCHSCALE_LOCAL_DEMO_PASSWORD
                 ? {
