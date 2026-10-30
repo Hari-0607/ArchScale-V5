@@ -8,13 +8,12 @@
 
 ## Local Supabase
 
-1. Copy `.env.example` to `.env`.
-2. Run `supabase init` if this is a fresh local CLI setup, then `supabase start`. Copy the local API URL, anon key, service-role key, and database password from the CLI output into `.env`. Keep `SUPABASE_SERVICE_ROLE_KEY` server-side; never prefix it with `VITE_` or include it in a browser build.
+1. Copy `.env.example` to `.env`. The checked-in `supabase/config.toml` configures an isolated local Supabase stack on ports 55320–55327 so it does not collide with the usual local Supabase ports. Run `supabase start` from the repository root. Copy the local API URL, anon key, and service-role key from the CLI output into `.env`. Keep `SUPABASE_SERVICE_ROLE_KEY` server-side; never prefix it with `VITE_` or include it in a browser build.
 3. Keep `ARCHSCALE_ENV=development`, `SUPABASE_URL` on `127.0.0.1`, and both database URLs on loopback. The application refuses non-loopback URLs in development mode.
-4. Run `npm ci`, then `npm run migrate:local`. This applies numbered migrations in order and baseline seeds. It is idempotent at the SQL-object/data level; review a migration before reapplying it to a database containing user data.
+4. Run `npm ci`, then `npm run migrate:local` once against the fresh local database. This applies migrations and baseline seeds in dependency order. The runner does not track previously applied migrations; do not rerun it on an initialized database.
 5. Configure Supabase Auth email confirmations and SMTP in the local Supabase configuration. Local Supabase routes mail to Inbucket by default. For hosted environments, configure a verified SMTP provider in Supabase Auth and set the redirect URL to `ARCHSCALE_FRONTEND_URL`.
-6. Create or invite at least one user, create an active tenant membership and workspace, and enable the `tasks` and `attendance` entitlements before using those apps. The repository does not yet include the requested complete 11-member/3-tenant scenario seed.
-7. Start the API with `npm run dev:server`. In another terminal, run `npm run dev:ui`. Use email/password sign-in. Tokens stay in browser memory and are cleared on reload/logout.
+6. Run `npm run seed:local-demo` to create/reset a confirmed local Supabase account and provision its user mirror, active organisation membership, default workspace, and app entitlements. The seed refuses non-loopback Supabase and database URLs. Set `ARCHSCALE_LOCAL_DEMO_EMAIL` and `ARCHSCALE_LOCAL_DEMO_PASSWORD` in `.env` to customize the local credentials.
+7. Start the API with `npm run dev:server`. In another terminal, run `npm run dev:ui`. Sign in with the email and password configured above, then choose **ArchScale Local Demo** and **Default Workspace**. Tokens stay in browser memory and are cleared on reload/logout.
 
 ## Tests
 
@@ -44,3 +43,4 @@ The local database guard rejects non-loopback hosts. `npm run build` runs TypeSc
 - User account invitations and scenario membership provisioning until the dedicated idempotent seed script is completed.
 - Explicit, audited policy rows if platform staff are ever authorized to read tenant app records.
 - Realtime design: the current app context is transaction-local, so do not add a direct browser Realtime subscription until a context-bound claim/RLS bridge is implemented.
+
