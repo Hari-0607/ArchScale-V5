@@ -204,7 +204,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px' }}>
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--color-border)', marginBottom: 28 }}>
-          {(['manual'] as const).map(tab => (
+          {(import.meta.env.DEV ? (['manual', 'quick'] as const) : (['manual'] as const)).map(tab => (
             <button
               key={tab}
               onClick={() => { setActiveTab(tab); setError(null); }}
@@ -238,7 +238,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
         {activeTab === 'quick' && !loading && (
           <div>
             <div style={{ padding: '10px 14px', background: 'var(--color-warning-bg)', borderRadius: 'var(--radius)', border: '1px solid var(--color-warning)', marginBottom: 24, fontSize: 'var(--font-size-sm)', color: 'var(--color-warning)' }}>
-              Development mode: click any persona to sign in instantly.
+              Development mode: use the local demo account for a quick UI preview. Server access still follows that account’s actual organization membership.
             </div>
             {groups.map(({ dept, items }) => (
               <div key={dept} style={{ marginBottom: 24 }}>
