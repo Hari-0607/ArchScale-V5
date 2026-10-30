@@ -5,5 +5,9 @@ node_modules/
 dist/
 *.log
 .local/
+.local-test-db/
 .vitest/
 node_modules/.vite/
+supabase/.branches/
+supabase/.temp/
+
