@@ -95,19 +95,14 @@ export function createServer(
 
         const key = typeof req.body?.key === 'string' ? req.body.key : '';
         const personaMap: Record<string, { baseKey: string; role: string; dept: string; title: string; memberId: string }> = {
-            'founder':           { baseKey: 'founder',        role: 'founder',             dept: 'Platform',   title: 'Platform Super Admin', memberId: 'mem-00' },
-            'tenant_admin':      { baseKey: 'business_owner', role: 'business_owner',      dept: 'Management', title: 'Tenant Admin',          memberId: 'mem-01' },
-            'business_owner':    { baseKey: 'business_owner', role: 'business_owner',      dept: 'Management', title: 'Tenant Admin',          memberId: 'mem-01' },
-            'design_manager_1':  { baseKey: 'leader',         role: 'leader',              dept: 'Design',     title: 'Design Manager 1',      memberId: 'lead-01' },
-            'junior_designer_1': { baseKey: 'leader',         role: 'intern',              dept: 'Design',     title: 'Junior Designer 1',     memberId: 'des-01' },
-            'design_manager_2':  { baseKey: 'leader',         role: 'leader',              dept: 'Design',     title: 'Design Manager 2',      memberId: 'lead-02' },
-            'junior_designer_2': { baseKey: 'leader',         role: 'intern',              dept: 'Design',     title: 'Junior Designer 2',     memberId: 'des-02' },
-            'design_manager_3':  { baseKey: 'leader',         role: 'leader',              dept: 'Design',     title: 'Design Manager 3',      memberId: 'lead-03' },
-            'junior_designer_3': { baseKey: 'leader',         role: 'intern',              dept: 'Design',     title: 'Junior Designer 3',     memberId: 'des-03' },
-            'accounts_manager':  { baseKey: 'business_owner', role: 'manager_coordinator', dept: 'Accounts',   title: 'Accounts Manager',      memberId: 'acc-01' },
-            'junior_accountant': { baseKey: 'business_owner', role: 'intern',              dept: 'Accounts',   title: 'Junior Accountant',     memberId: 'acc-02' },
-            'hr_manager':        { baseKey: 'business_owner', role: 'manager_coordinator', dept: 'HR',         title: 'HR Manager',             memberId: 'hr-01' },
-            'junior_hr':         { baseKey: 'business_owner', role: 'intern',              dept: 'HR',         title: 'Junior HR',              memberId: 'hr-02' },
+            owner:               { baseKey: 'owner',   role: 'business_owner', dept: 'Management', title: 'Studio Owner',       memberId: 'local-owner' },
+            tenant_admin:         { baseKey: 'owner',   role: 'business_owner', dept: 'Management', title: 'Studio Owner',       memberId: 'local-owner' },
+            business_owner:       { baseKey: 'owner',   role: 'business_owner', dept: 'Management', title: 'Studio Owner',       memberId: 'local-owner' },
+            lead:                 { baseKey: 'lead',    role: 'leader',         dept: 'Design',     title: 'Lead Architect',     memberId: 'local-lead' },
+            design_manager_1:     { baseKey: 'lead',    role: 'leader',         dept: 'Design',     title: 'Lead Architect',     memberId: 'local-lead' },
+            member:               { baseKey: 'member',  role: 'intern',         dept: 'Design',     title: 'Junior Architect',   memberId: 'local-member' },
+            junior_designer_1:    { baseKey: 'member',  role: 'intern',         dept: 'Design',     title: 'Junior Architect',   memberId: 'local-member' },
+            partner:              { baseKey: 'partner', role: 'collaborator',   dept: 'External',   title: 'Partner Architect', memberId: 'local-partner' },
         };
         const persona = personaMap[key];
         if (!persona) {
@@ -121,16 +116,27 @@ export function createServer(
                 users = JSON.parse(fs.readFileSync(testUsersPath, 'utf-8'));
             }
 
-            const baseKey = key === 'founder' ? 'founder' : 'business_owner';
-            const configuredDemoUser = localDevelopment
-                && process.env.ARCHSCALE_LOCAL_DEMO_EMAIL
-                && process.env.ARCHSCALE_LOCAL_DEMO_PASSWORD
-                ? {
-                    email: process.env.ARCHSCALE_LOCAL_DEMO_EMAIL,
-                    password: process.env.ARCHSCALE_LOCAL_DEMO_PASSWORD,
-                }
-                : undefined;
-            const user = users[baseKey] || users[persona.baseKey] || users[key] || configuredDemoUser;
+            const accountCredentials: Record<string, { email: string; password: string }> = {
+                owner: {
+                    email: process.env.ARCHSCALE_LOCAL_DEMO_EMAIL || '',
+                    password: process.env.ARCHSCALE_LOCAL_DEMO_PASSWORD || '',
+                },
+                lead: {
+                    email: process.env.ARCHSCALE_LOCAL_MEMBER_EMAIL || '',
+                    password: process.env.ARCHSCALE_LOCAL_MEMBER_PASSWORD || '',
+                },
+                member: {
+                    email: process.env.ARCHSCALE_LOCAL_STAFF_EMAIL || '',
+                    password: process.env.ARCHSCALE_LOCAL_STAFF_PASSWORD || '',
+                },
+                partner: {
+                    email: process.env.ARCHSCALE_LOCAL_PARTNER_EMAIL || '',
+                    password: process.env.ARCHSCALE_LOCAL_PARTNER_PASSWORD || '',
+                },
+            };
+            const configuredDemoUser = localDevelopment ? accountCredentials[persona.baseKey] : undefined;
+            const legacyUserKey = persona.baseKey === 'owner' ? 'business_owner' : persona.baseKey === 'lead' ? 'leader' : persona.baseKey;
+            const user = users[persona.baseKey] || users[legacyUserKey] || users[key] || configuredDemoUser;
             if (!user?.email || !user.password) {
                 return res.status(503).json({
                     error: 'DEMO_LOGIN_NOT_CONFIGURED',
