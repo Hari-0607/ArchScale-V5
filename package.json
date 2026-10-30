@@ -13,6 +13,7 @@
     "server": "npx tsx src/server/index.ts",
     "dev:server": "npx tsx watch src/server/index.ts",
     "migrate:local": "npx tsx scripts/apply_local_migrations.ts",
+    "seed:local-demo": "npx tsx scripts/seed_local_demo.ts",
     "build:ui": "vite build",
     "dev:ui": "vite",
     "build": "tsc"
@@ -45,3 +46,4 @@
     "react-dom": "^19.3.1"
   }
 }
+
