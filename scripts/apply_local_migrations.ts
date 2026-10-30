@@ -17,16 +17,28 @@ async function main() {
     try {
         const migrationsDir = path.resolve(here, '../migrations');
         const migrations = (await fs.readdir(migrationsDir)).filter(f => /^\d{3}_.*\.sql$/.test(f)).sort();
+        const baselineSeeds = (await fs.readdir(path.resolve(here, '../seeds')))
+            .filter(f => /^\d{3}_.*\.sql$/.test(f)).sort();
+        let seedsApplied = false;
+        const applyBaselineSeeds = async () => {
+            for (const seed of baselineSeeds) {
+                process.stdout.write(`Seeding ${seed}\n`);
+                await client.query(await fs.readFile(path.resolve(here, '../seeds', seed), 'utf8'));
+            }
+            seedsApplied = true;
+        };
+
         for (const file of migrations) {
+            // Migration 016 seeds authorization policies that reference baseline
+            // roles. Apply the role/permission seeds after their tables exist,
+            // but before that migration installs its foreign-keyed policies.
+            if (!seedsApplied && Number.parseInt(file.slice(0, 3), 10) >= 16) {
+                await applyBaselineSeeds();
+            }
             process.stdout.write(`Applying ${file}\n`);
             await client.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
         }
-        const seedsDir = path.resolve(here, '../seeds');
-        const seeds = (await fs.readdir(seedsDir)).filter(f => /^\d{3}_.*\.sql$/.test(f)).sort();
-        for (const file of seeds) {
-            process.stdout.write(`Seeding ${file}\n`);
-            await client.query(await fs.readFile(path.join(seedsDir, file), 'utf8'));
-        }
+        if (!seedsApplied) await applyBaselineSeeds();
     } finally {
         await client.end();
     }
@@ -38,3 +50,4 @@ main().catch(error => {
     process.stderr.write(`Local migration failed (${error?.code || error?.name || 'unknown error'}).\n`);
     process.exitCode = 1;
 });
+
