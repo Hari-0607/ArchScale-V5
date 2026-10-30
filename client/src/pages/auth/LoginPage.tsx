@@ -26,21 +26,13 @@ interface Persona {
 }
 
 const PERSONAS: Persona[] = [
-  { key: 'founder',          name: 'Platform Founder',   role: 'founder',              dept: 'Platform',  jobRole: 'Platform Super Admin',  badge: 'BACKSTAGE',  badgeColor: 'var(--color-warning)',  aal: 'AAL2', desc: 'Global super admin — manages all tenants.' },
-  { key: 'tenant_admin',     name: 'Tenant Admin',        role: 'business_owner',       dept: 'Management',jobRole: 'Studio Owner',           badge: 'OWNER',      badgeColor: '#8b5cf6',               aal: 'AAL2', desc: 'Full tenant management and team configuration.' },
-  { key: 'design_manager_1', name: 'Design Manager 1',   role: 'leader',               dept: 'Design',    jobRole: 'Lead Architect',         badge: 'LEADER',     badgeColor: 'var(--color-accent)',   aal: 'AAL1', desc: 'Design Team 1 lead. Cross-team visibility.' },
-  { key: 'junior_designer_1',name: 'Junior Designer 1',  role: 'intern',               dept: 'Design',    jobRole: 'Junior Architect',       badge: 'MEMBER',     badgeColor: 'var(--color-success)',  aal: 'AAL1', desc: 'Design Team 1 junior. Own tasks only.' },
-  { key: 'design_manager_2', name: 'Design Manager 2',   role: 'leader',               dept: 'Design',    jobRole: 'MEP Design Lead',        badge: 'LEADER',     badgeColor: 'var(--color-accent)',   aal: 'AAL1', desc: 'Design Team 2 lead.' },
-  { key: 'junior_designer_2',name: 'Junior Designer 2',  role: 'intern',               dept: 'Design',    jobRole: 'CAD Technician',         badge: 'MEMBER',     badgeColor: 'var(--color-success)',  aal: 'AAL1', desc: 'Design Team 2 junior.' },
-  { key: 'design_manager_3', name: 'Design Manager 3',   role: 'leader',               dept: 'Design',    jobRole: 'Landscape Design Lead',  badge: 'LEADER',     badgeColor: 'var(--color-accent)',   aal: 'AAL1', desc: 'Design Team 3 lead.' },
-  { key: 'junior_designer_3',name: 'Junior Designer 3',  role: 'intern',               dept: 'Design',    jobRole: '3D Visualizer',          badge: 'MEMBER',     badgeColor: 'var(--color-success)',  aal: 'AAL1', desc: 'Design Team 3 junior.' },
-  { key: 'accounts_manager', name: 'Accounts Manager',   role: 'manager_coordinator',  dept: 'Accounts',  jobRole: 'Finance Controller',     badge: 'MANAGER',    badgeColor: 'var(--color-success)',  aal: 'AAL1', desc: 'Accounts team lead.' },
-  { key: 'junior_accountant',name: 'Junior Accountant',  role: 'intern',               dept: 'Accounts',  jobRole: 'Billing Specialist',     badge: 'MEMBER',     badgeColor: 'var(--color-success)',  aal: 'AAL1', desc: 'Accounts junior.' },
-  { key: 'hr_manager',       name: 'HR Manager',          role: 'manager_coordinator',  dept: 'HR',        jobRole: 'People & Culture Lead',  badge: 'MANAGER',    badgeColor: '#ec4899',               aal: 'AAL1', desc: 'HR lead. Full attendance access.' },
-  { key: 'junior_hr',        name: 'Junior HR',           role: 'intern',               dept: 'HR',        jobRole: 'HR Coordinator',         badge: 'MEMBER',     badgeColor: 'var(--color-success)',  aal: 'AAL1', desc: 'HR junior. View attendance, add comments.' },
+  { key: 'owner',   name: 'Organisation Owner', role: 'business_owner', dept: 'Management', jobRole: 'Studio Owner', badge: 'OWNER', badgeColor: '#8b5cf6', aal: 'AAL1', desc: 'Manage the local demo organisation and its team.' },
+  { key: 'lead',    name: 'Design Lead',        role: 'leader',         dept: 'Design',     jobRole: 'Lead Architect', badge: 'LEAD', badgeColor: 'var(--color-accent)', aal: 'AAL1', desc: 'Organisation member with the design lead role.' },
+  { key: 'member',  name: 'Organisation Member',role: 'intern',         dept: 'Design',     jobRole: 'Junior Architect', badge: 'MEMBER', badgeColor: 'var(--color-success)', aal: 'AAL1', desc: 'Standard organisation team member.' },
+  { key: 'partner', name: 'External Partner',   role: 'collaborator',   dept: 'External',   jobRole: 'Partner Architect', badge: 'PARTNER', badgeColor: 'var(--color-warning)', aal: 'AAL1', desc: 'External collaborator in the demo organisation.' },
 ];
 
-const DEPT_ORDER = ['Platform', 'Management', 'Design', 'Accounts', 'HR'];
+const DEPT_ORDER = ['Management', 'Design', 'External'];
 
 function groupByDept(personas: Persona[]) {
   const groups: Record<string, Persona[]> = {};
