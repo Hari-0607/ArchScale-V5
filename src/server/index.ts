@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import { sendInvitationMail } from '../mail/sink.js';
 import { generateTotpCode } from '../utils/totp.js';
 import { PoolClient } from 'pg';
+import { config } from '../config/env.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -86,62 +87,95 @@ export function createServer(
         res.status(404).json({ error: 'NOT_FOUND' }));
 
     app.post('/api/demo/quick-login', async (req: Request, res: Response) => {
-        if (process.env.NODE_ENV !== 'test' || process.env.ALLOW_LOCAL_AUTH !== 'true') {
+        const localDevelopment = config.env === 'development';
+        const localTest = config.nodeEnv === 'test' && config.allowLocalAuth;
+        if (!localDevelopment && !localTest) {
             return res.status(404).json({ error: 'NOT_FOUND' });
         }
-        try {
-            const { key, autoElevate } = req.body || {};
-            const testUsersPath = path.join(process.cwd(), '.local/test-users.json');
-            if (fs.existsSync(testUsersPath)) {
-                const users = JSON.parse(fs.readFileSync(testUsersPath, 'utf-8'));
-                const personaMap: Record<string, { baseKey: string; role: string; dept: string; title: string; memberId: string }> = {
-                    'founder':          { baseKey: 'founder',          role: 'founder',             dept: 'Platform',   title: 'Platform Super Admin',  memberId: 'mem-00' },
-                    'tenant_admin':     { baseKey: 'business_owner',   role: 'business_owner',      dept: 'Management', title: 'Tenant Admin',           memberId: 'mem-01' },
-                    'business_owner':   { baseKey: 'business_owner',   role: 'business_owner',      dept: 'Management', title: 'Tenant Admin',           memberId: 'mem-01' },
-                    'design_manager_1': { baseKey: 'leader',           role: 'leader',              dept: 'Design',     title: 'Design Manager 1',       memberId: 'lead-01' },
-                    'junior_designer_1':{ baseKey: 'leader',           role: 'intern',              dept: 'Design',     title: 'Junior Designer 1',      memberId: 'des-01' },
-                    'design_manager_2': { baseKey: 'leader',           role: 'leader',              dept: 'Design',     title: 'Design Manager 2',       memberId: 'lead-02' },
-                    'junior_designer_2':{ baseKey: 'leader',           role: 'intern',              dept: 'Design',     title: 'Junior Designer 2',      memberId: 'des-02' },
-                    'design_manager_3': { baseKey: 'leader',           role: 'leader',              dept: 'Design',     title: 'Design Manager 3',       memberId: 'lead-03' },
-                    'junior_designer_3':{ baseKey: 'leader',           role: 'intern',              dept: 'Design',     title: 'Junior Designer 3',      memberId: 'des-03' },
-                    'accounts_manager': { baseKey: 'business_owner',   role: 'manager_coordinator', dept: 'Accounts',   title: 'Accounts Manager',       memberId: 'acc-01' },
-                    'junior_accountant':{ baseKey: 'business_owner',   role: 'intern',              dept: 'Accounts',   title: 'Junior Accountant',      memberId: 'acc-02' },
-                    'hr_manager':       { baseKey: 'business_owner',   role: 'manager_coordinator', dept: 'HR',         title: 'HR Manager',             memberId: 'hr-01' },
-                    'junior_hr':        { baseKey: 'business_owner',   role: 'intern',              dept: 'HR',         title: 'Junior HR',              memberId: 'hr-02' },
-                };
 
-                const persona = personaMap[key] || { baseKey: key, role: key, dept: 'General', title: key, memberId: 'mem-00' };
-                // Always use the business_owner account as the shared demo identity for all non-founder personas
-                // This ensures all personas are in the same org and can create contexts
-                const resolvedBaseKey = (key === 'founder') ? 'founder' : 'business_owner';
-                const user = users[resolvedBaseKey] || users[persona.baseKey] || users[key];
-                if (user) {
-                    const idp = identityProvider || getIdentityProvider();
-                    const session = await idp.signIn({ email: user.email, password: user.password });
-                    // All demo personas get elevated to aal2 automatically (no TOTP friction in dev)
-                    elevatedPrincipals.add(session.principal.id);
-                    if (session.principal.sessionId) elevatedPrincipals.add(session.principal.sessionId);
-                    session.principal.aal = 'aal2';
-                    return res.status(200).json({
-                        accessToken: session.accessToken,
-                        refreshToken: session.refreshToken,
-                        principal: {
-                            ...session.principal,
-                            role: persona.role,
-                            department: persona.dept,
-                            jobRole: persona.title,
-                            personaKey: key,
-                            memberId: (persona as any).memberId
-                        },
-                        mfaRequired: false,
-                        demoPersona: { key, role: persona.role, dept: persona.dept, title: persona.title, memberId: (persona as any).memberId }
-                    });
-                }
-            }
-        } catch (err: any) {
-            return res.status(401).json({ error: err.message || 'QUICK_LOGIN_FAILED' });
+        const key = typeof req.body?.key === 'string' ? req.body.key : '';
+        const personaMap: Record<string, { baseKey: string; role: string; dept: string; title: string; memberId: string }> = {
+            'founder':           { baseKey: 'founder',        role: 'founder',             dept: 'Platform',   title: 'Platform Super Admin', memberId: 'mem-00' },
+            'tenant_admin':      { baseKey: 'business_owner', role: 'business_owner',      dept: 'Management', title: 'Tenant Admin',          memberId: 'mem-01' },
+            'business_owner':    { baseKey: 'business_owner', role: 'business_owner',      dept: 'Management', title: 'Tenant Admin',          memberId: 'mem-01' },
+            'design_manager_1':  { baseKey: 'leader',         role: 'leader',              dept: 'Design',     title: 'Design Manager 1',      memberId: 'lead-01' },
+            'junior_designer_1': { baseKey: 'leader',         role: 'intern',              dept: 'Design',     title: 'Junior Designer 1',     memberId: 'des-01' },
+            'design_manager_2':  { baseKey: 'leader',         role: 'leader',              dept: 'Design',     title: 'Design Manager 2',      memberId: 'lead-02' },
+            'junior_designer_2': { baseKey: 'leader',         role: 'intern',              dept: 'Design',     title: 'Junior Designer 2',     memberId: 'des-02' },
+            'design_manager_3':  { baseKey: 'leader',         role: 'leader',              dept: 'Design',     title: 'Design Manager 3',      memberId: 'lead-03' },
+            'junior_designer_3': { baseKey: 'leader',         role: 'intern',              dept: 'Design',     title: 'Junior Designer 3',     memberId: 'des-03' },
+            'accounts_manager':  { baseKey: 'business_owner', role: 'manager_coordinator', dept: 'Accounts',   title: 'Accounts Manager',      memberId: 'acc-01' },
+            'junior_accountant': { baseKey: 'business_owner', role: 'intern',              dept: 'Accounts',   title: 'Junior Accountant',     memberId: 'acc-02' },
+            'hr_manager':        { baseKey: 'business_owner', role: 'manager_coordinator', dept: 'HR',         title: 'HR Manager',             memberId: 'hr-01' },
+            'junior_hr':         { baseKey: 'business_owner', role: 'intern',              dept: 'HR',         title: 'Junior HR',              memberId: 'hr-02' },
+        };
+        const persona = personaMap[key];
+        if (!persona) {
+            return res.status(400).json({ error: 'DEMO_PERSONA_NOT_FOUND', message: 'Select a valid demo persona.' });
         }
-        return res.status(404).json({ error: 'USER_PRESET_NOT_FOUND' });
+
+        try {
+            const testUsersPath = path.join(process.cwd(), '.local/test-users.json');
+            let users: Record<string, { email?: string; password?: string }> = {};
+            if (fs.existsSync(testUsersPath)) {
+                users = JSON.parse(fs.readFileSync(testUsersPath, 'utf-8'));
+            }
+
+            const baseKey = key === 'founder' ? 'founder' : 'business_owner';
+            const configuredDemoUser = localDevelopment && key !== 'founder'
+                && process.env.ARCHSCALE_LOCAL_DEMO_EMAIL
+                && process.env.ARCHSCALE_LOCAL_DEMO_PASSWORD
+                ? {
+                    email: process.env.ARCHSCALE_LOCAL_DEMO_EMAIL,
+                    password: process.env.ARCHSCALE_LOCAL_DEMO_PASSWORD,
+                }
+                : undefined;
+            const user = users[baseKey] || users[persona.baseKey] || users[key] || configuredDemoUser;
+            if (!user?.email || !user.password) {
+                return res.status(503).json({
+                    error: 'DEMO_LOGIN_NOT_CONFIGURED',
+                    message: 'Configure a local demo account before using Quick Login.',
+                });
+            }
+
+            const idp = identityProvider || getIdentityProvider();
+            const session = await idp.signIn({ email: user.email, password: user.password });
+            let mfaRequired = false;
+            try {
+                const mfaStatus = await idp.getMfaStatus(session.principal.id);
+                mfaRequired = mfaStatus.factors.some(f => f.status === 'verified')
+                    && session.principal.aal !== 'aal2';
+            } catch {
+                mfaRequired = false;
+            }
+
+            const demoPersona = {
+                key,
+                role: persona.role,
+                dept: persona.dept,
+                title: persona.title,
+                memberId: persona.memberId,
+            };
+            return res.status(200).json({
+                accessToken: session.accessToken,
+                refreshToken: session.refreshToken,
+                principal: {
+                    ...session.principal,
+                    role: persona.role,
+                    department: persona.dept,
+                    jobRole: persona.title,
+                    personaKey: key,
+                    memberId: persona.memberId,
+                },
+                mfaRequired,
+                demoPersona,
+            });
+        } catch {
+            return res.status(401).json({
+                error: 'QUICK_LOGIN_FAILED',
+                message: 'Local demo sign-in failed. Check the local demo account and try again.',
+            });
+        }
     });
 
     // 1. POST /api/session/sign-in
