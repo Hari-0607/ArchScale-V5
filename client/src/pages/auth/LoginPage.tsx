@@ -204,7 +204,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px' }}>
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--color-border)', marginBottom: 28 }}>
-          {(import.meta.env.DEV ? (['manual', 'quick'] as const) : (['manual'] as const)).map(tab => (
+          {((import.meta.env.DEV || ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname.replace(/^\[|\]$/g, ''))) ? (['manual', 'quick'] as const) : (['manual'] as const)).map(tab => (
             <button
               key={tab}
               onClick={() => { setActiveTab(tab); setError(null); }}
