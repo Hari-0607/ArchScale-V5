@@ -131,6 +131,47 @@ export function validateConfig(): AppConfig {
         }
     }
 
+    if (env === 'production') {
+        const projectRef = (process.env.ARCHSCALE_PRODUCTION_PROJECT_REF || '').trim();
+        if (!projectRef) {
+            throw new Error('ABORTED: ARCHSCALE_PRODUCTION_PROJECT_REF is required for production.');
+        }
+        const required = [
+            'SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY',
+            'ARCHSCALE_RUNTIME_DB_URL', 'ARCHSCALE_FRONTEND_URL',
+        ];
+        const missing = required.filter(name => !process.env[name]);
+        if (missing.length) {
+            throw new Error(`ABORTED: Missing production environment variables: ${missing.join(', ')}`);
+        }
+
+        let hostedUrl: URL;
+        let parsedRuntimeUrl: URL;
+        let frontendUrl: URL;
+        try {
+            hostedUrl = new URL(supabaseUrl);
+            parsedRuntimeUrl = new URL(runtimeUrl);
+            frontendUrl = new URL(process.env.ARCHSCALE_FRONTEND_URL || '');
+        } catch {
+            throw new Error('ABORTED: A production Supabase, database, or frontend URL is invalid.');
+        }
+        if (hostedUrl.protocol !== 'https:' || hostedUrl.hostname !== `${projectRef}.supabase.co`) {
+            throw new Error('ABORTED: SUPABASE_URL must be the HTTPS URL for ARCHSCALE_PRODUCTION_PROJECT_REF.');
+        }
+        if (!['postgres:', 'postgresql:'].includes(parsedRuntimeUrl.protocol) ||
+            ['localhost', '127.0.0.1', '::1'].includes(parsedRuntimeUrl.hostname)) {
+            throw new Error('ABORTED: ARCHSCALE_RUNTIME_DB_URL must point to the hosted production database.');
+        }
+        const runtimeProjectRef = parsedRuntimeUrl.username.split('.').pop() || '';
+        const runtimeHostMatches = parsedRuntimeUrl.hostname === `db.${projectRef}.supabase.co`;
+        if (!runtimeHostMatches && runtimeProjectRef !== projectRef) {
+            throw new Error('ABORTED: ARCHSCALE_RUNTIME_DB_URL does not match ARCHSCALE_PRODUCTION_PROJECT_REF.');
+        }
+        if (frontendUrl.protocol !== 'https:') {
+            throw new Error('ABORTED: ARCHSCALE_FRONTEND_URL must use HTTPS in production.');
+        }
+    }
+
     return {
         env,
         nodeEnv,

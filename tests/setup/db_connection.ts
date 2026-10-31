@@ -109,8 +109,7 @@ export async function createIsolatedTestDatabase(testDbName: string): Promise<pg
         '012_secure_user_mirror_access.sql',
         '013_context_rls_and_authz_functions.sql',
         '014_organisational_hierarchy_and_invitations.sql',
-        '015_invitations_refinements_and_security_hardening.sql',
-        '016_tasks_attendance_modules.sql'
+        '015_invitations_refinements_and_security_hardening.sql'
     ];
 
     for (const file of migrationFiles) {
@@ -132,6 +131,11 @@ export async function createIsolatedTestDatabase(testDbName: string): Promise<pg
             await testPool.query(seedSql);
         }
     }
+
+    // Migration 016 creates task/attendance policy rows that reference seeded
+    // application roles, so load the baseline roles and permissions first.
+    const appDataMigration = path.join(__dirname, '../../migrations', '016_tasks_attendance_modules.sql');
+    await testPool.query(fs.readFileSync(appDataMigration, 'utf-8'));
 
     return testPool;
 }

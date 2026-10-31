@@ -26,23 +26,13 @@ interface Persona {
 }
 
 const PERSONAS: Persona[] = [
-  { key: 'owner',   name: 'Organisation Owner', role: 'business_owner', dept: 'Management', jobRole: 'Studio Owner', badge: 'OWNER', badgeColor: '#8b5cf6', aal: 'AAL1', desc: 'Manage the local demo organisation and its team.' },
-  { key: 'lead',    name: 'Design Lead',        role: 'leader',         dept: 'Design',     jobRole: 'Lead Architect', badge: 'LEAD', badgeColor: 'var(--color-accent)', aal: 'AAL1', desc: 'Organisation member with the design lead role.' },
-  { key: 'member',  name: 'Organisation Member',role: 'intern',         dept: 'Design',     jobRole: 'Junior Architect', badge: 'MEMBER', badgeColor: 'var(--color-success)', aal: 'AAL1', desc: 'Standard organisation team member.' },
-  { key: 'partner', name: 'External Partner',   role: 'collaborator',   dept: 'External',   jobRole: 'Partner Architect', badge: 'PARTNER', badgeColor: 'var(--color-warning)', aal: 'AAL1', desc: 'External collaborator in the demo organisation.' },
+  { key: 'owner', name: 'Studio Owner', role: 'business_owner', dept: 'Management', jobRole: 'Organisation administrator', badge: 'OWNER', badgeColor: '#8b5cf6', aal: 'AAL1', desc: 'Local Supabase demo account with organisation administration access.' },
+  { key: 'lead', name: 'Design Lead', role: 'leader', dept: 'Design', jobRole: 'Lead Architect', badge: 'LEADER', badgeColor: 'var(--color-accent)', aal: 'AAL1', desc: 'Local demo account with design team permissions.' },
+  { key: 'member', name: 'Design Member', role: 'intern', dept: 'Design', jobRole: 'Junior Architect', badge: 'MEMBER', badgeColor: 'var(--color-success)', aal: 'AAL1', desc: 'Local demo account with member permissions.' },
+  { key: 'partner', name: 'External Partner', role: 'collaborator', dept: 'External', jobRole: 'Partner Architect', badge: 'PARTNER', badgeColor: 'var(--color-success)', aal: 'AAL1', desc: 'Local demo account with partner permissions.' },
 ];
 
-const DEPT_ORDER = ['Management', 'Design', 'External'];
-
-function groupByDept(personas: Persona[]) {
-  const groups: Record<string, Persona[]> = {};
-  for (const p of personas) {
-    if (!groups[p.dept]) groups[p.dept] = [];
-    groups[p.dept].push(p);
-  }
-  return DEPT_ORDER.map(d => ({ dept: d, items: groups[d] ?? [] })).filter(g => g.items.length);
-}
-
+const groups = [{ dept: 'Local demo accounts', items: PERSONAS }];
 export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +44,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
   // Manual login
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  const [activeTab, setActiveTab] = useState<'quick' | 'manual'>('manual');
+  const [activeTab, setActiveTab] = useState<'quick' | 'manual'>(import.meta.env.DEV ? 'quick' : 'manual');
 
   const finaliseSession = (data: { accessToken: string; refreshToken?: string; principal: { id: string; email: string; aal: 'aal1'|'aal2'; role?: string; department?: string; jobRole?: string; personaKey?: string; memberId?: string; sessionId?: string }; mfaRequired?: boolean; demoPersona?: { key: string; role: string; dept: string; title: string; memberId: string } }) => {
     // Guard: accessToken must be present or we cannot proceed
@@ -180,7 +170,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
   }
 
   // ── Main login ────────────────────────────────────────────────────────────
-  const groups = groupByDept(PERSONAS);
+  const tabs = import.meta.env.DEV ? ['quick', 'manual'] as const : ['manual'] as const;
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--color-bg)', overflowY: 'auto' }}>
@@ -196,7 +186,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px' }}>
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--color-border)', marginBottom: 28 }}>
-          {((import.meta.env.DEV || ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname.replace(/^\[|\]$/g, ''))) ? (['manual', 'quick'] as const) : (['manual'] as const)).map(tab => (
+          {tabs.map(tab => (
             <button
               key={tab}
               onClick={() => { setActiveTab(tab); setError(null); }}
@@ -230,7 +220,7 @@ export const LoginPage: React.FC<LoginProps> = ({ onSuccess }) => {
         {activeTab === 'quick' && !loading && (
           <div>
             <div style={{ padding: '10px 14px', background: 'var(--color-warning-bg)', borderRadius: 'var(--radius)', border: '1px solid var(--color-warning)', marginBottom: 24, fontSize: 'var(--font-size-sm)', color: 'var(--color-warning)' }}>
-              Development mode: use the local demo account for a quick UI preview. Server access still follows that account’s actual organization membership.
+              Local development only. Each button signs in to a real seeded Supabase account; organization membership and permissions still apply.
             </div>
             {groups.map(({ dept, items }) => (
               <div key={dept} style={{ marginBottom: 24 }}>

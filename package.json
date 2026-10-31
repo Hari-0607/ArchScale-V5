@@ -14,9 +14,11 @@
     "dev:server": "npx tsx watch src/server/index.ts",
     "migrate:local": "npx tsx scripts/apply_local_migrations.ts",
     "seed:local-demo": "npx tsx scripts/seed_local_demo.ts",
+    "bootstrap:tenant-owner": "npx tsx scripts/bootstrap_tenant_owner.ts",
     "build:ui": "vite build",
     "dev:ui": "vite",
-    "build": "tsc"
+    "build": "tsc",
+    "build:vercel": "npm run build && npm run build:ui"
   },
   "keywords": [
     "auth",
@@ -46,4 +48,3 @@
     "react-dom": "^19.3.1"
   }
 }
-

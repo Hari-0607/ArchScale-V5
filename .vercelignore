@@ -1,0 +1,8 @@
+.env
+.env.*
+.vercel/
+.local/
+.local-test-db/
+dist/
+node_modules/
+src/server/public/

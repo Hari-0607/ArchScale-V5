@@ -50,4 +50,3 @@ main().catch(error => {
     process.stderr.write(`Local migration failed (${error?.code || error?.name || 'unknown error'}).\n`);
     process.exitCode = 1;
 });
-

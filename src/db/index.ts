@@ -42,18 +42,9 @@ function createRuntimePool(): pg.Pool {
         });
     }
 
-    if (config.env === 'development') {
-        return new Pool({
-            connectionString: config.archscaleRuntimeDbUrl,
-            ssl: false,
-            max: 10,
-            idleTimeoutMillis: 30000,
-            connectionTimeoutMillis: 10000
-        });
-    }
-
     if (process.env.NODE_ENV === 'test') {
-        // Local test mode: strictly must NOT read ARCHSCALE_RUNTIME_DB_URL
+        // Test mode takes precedence over development config. Never let Vitest
+        // connect to the app's runtime database, even if .env says development.
         const testDbUrl = process.env.ARCHSCALE_TEST_DB_URL;
         const parsed = assertLocalTestDatabaseGuard(testDbUrl);
         return new Pool({
@@ -62,6 +53,16 @@ function createRuntimePool(): pg.Pool {
             user: 'archscale_app_runtime',
             password: process.env.ARCHSCALE_LOCAL_RUNTIME_PASSWORD || 'local_test_pass',
             database: parsed.pathname.replace('/', '') || 'postgres',
+            max: 10,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000
+        });
+    }
+
+    if (config.env === 'development') {
+        return new Pool({
+            connectionString: config.archscaleRuntimeDbUrl,
+            ssl: false,
             max: 10,
             idleTimeoutMillis: 30000,
             connectionTimeoutMillis: 10000

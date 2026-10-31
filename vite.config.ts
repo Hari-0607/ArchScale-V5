@@ -1,12 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
   root: 'client',
   build: {
-    outDir: '../src/server/public',
+    outDir: '../public',
     emptyOutDir: true,
   },
   server: {

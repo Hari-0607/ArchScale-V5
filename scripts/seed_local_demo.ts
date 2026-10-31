@@ -30,7 +30,12 @@ const authAdmin = createClient(supabaseUrl, env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 const { data: listed, error: listError } = await authAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-if (listError) throw new Error(`Could not inspect local auth users (${listError.status || 'auth error'}).`);
+if (listError) {
+  if (!listError.status) {
+    throw new Error('Could not reach local Supabase Auth. Start the stack with `supabase start`, then verify SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env match that stack.');
+  }
+  throw new Error(`Could not inspect local auth users (HTTP ${listError.status}). Verify SUPABASE_SERVICE_ROLE_KEY in .env matches the current local Supabase stack.`);
+}
 const existingUsers = new Map(listed.users.map(user => [user.email?.toLowerCase(), user]));
 const seededUsers = new Map<string, { id: string; email: string }>();
 for (const account of accounts) {
@@ -122,4 +127,3 @@ async function upsertMembership(
   );
   return result.rows[0].id;
 }
-
